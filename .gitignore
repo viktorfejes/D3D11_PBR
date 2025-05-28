@@ -30,6 +30,7 @@
 # Misc
 compile_commands.json
 doc.cap
+*.spp
 
 ### Folders ###
 .xmake/
