@@ -1,0 +1,1086 @@
+#include "renderer.hpp"
+
+#include "application.hpp"
+#include "id.hpp"
+#include "logger.hpp"
+#include "mesh.hpp"
+#include "scene.hpp"
+#include "shader_system.hpp"
+#include "texture.hpp"
+
+#include <DirectXMath.h>
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#include <dxgiformat.h>
+
+#ifndef MIN
+#define MIN(a, b) (a < b ? a : b)
+#endif
+#ifndef MAX
+#define MAX(a, b) (a > b ? a : b)
+#endif
+
+bool renderer::initialize(Renderer *renderer, Window *pWindow) {
+    // Store pointer to window
+    if (!pWindow) {
+        LOG("The pointer provided for window was invalid.");
+        return false;
+    }
+    renderer->pWindow = pWindow;
+
+    // Set up the swap chain and with it the device
+    DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
+    swapChainDesc.BufferCount = 2;
+    swapChainDesc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    swapChainDesc.BufferDesc.Width = pWindow->width;
+    swapChainDesc.BufferDesc.Height = pWindow->height;
+    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    swapChainDesc.OutputWindow = pWindow->hwnd;
+    swapChainDesc.SampleDesc.Count = 1;
+    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    swapChainDesc.Windowed = TRUE;
+
+    D3D_FEATURE_LEVEL featureLevels[] = {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0};
+    // TODO: Will probably take the singlethreaded out at one point...
+    UINT flags = D3D11_CREATE_DEVICE_SINGLETHREADED;
+#ifdef _DEBUG
+    flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+
+    HRESULT hr = D3D11CreateDeviceAndSwapChain(
+        NULL,
+        D3D_DRIVER_TYPE_HARDWARE,
+        NULL,
+        flags,
+        featureLevels,
+        ARRAYSIZE(featureLevels),
+        D3D11_SDK_VERSION,
+        &swapChainDesc,
+        renderer->pSwapChain.GetAddressOf(), // Output parameter
+        renderer->pDevice.GetAddressOf(),    // Output parameter
+        &renderer->featureLevel,
+        renderer->pContext.GetAddressOf()); // Output parameter
+
+    if (FAILED(hr)) {
+        LOG("D3D11CreateDeviceAndSwapChain failed.");
+        return false;
+    }
+
+    // We need to get the back buffer
+    // NOTE: We need to add this pragma to clang (which is what I'm using),
+    // because in clang Microsoft extensions (like __uuidof) give warnings,
+    // as they are not standard C++ and I have -Werror on, which turns warnings
+    // into errors.
+    // NOTE2: Pragma commented out in favour of IID_PPV_ARGS but leaving it here
+    // for future reference...
+    // #pragma clang diagnostic push
+    // #pragma clang diagnostic ignored "-Wlanguage-extension-token"
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> pBackBuffer;
+    hr = renderer->pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    if (FAILED(hr)) {
+        LOG("Renderer error: Couldn't get the backbuffer texture");
+        return false;
+    }
+    // #pragma clang diagnostic pop
+
+    // Now get the render target view (we only need one as we'll only have a single window)
+    hr = renderer->pDevice->CreateRenderTargetView(pBackBuffer.Get(), nullptr, renderer->pRenderTargetView.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create RenderTargetView");
+        return false;
+    }
+
+    // Create Depth Stencil Texture
+    D3D11_TEXTURE2D_DESC depthStencilDesc = {};
+    depthStencilDesc.Width = pWindow->width;
+    depthStencilDesc.Height = pWindow->height;
+    depthStencilDesc.MipLevels = 1;
+    depthStencilDesc.ArraySize = 1;
+    depthStencilDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    depthStencilDesc.SampleDesc.Count = 1;
+    depthStencilDesc.SampleDesc.Quality = 0;
+    depthStencilDesc.Usage = D3D11_USAGE_DEFAULT;
+    depthStencilDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    depthStencilDesc.CPUAccessFlags = 0;
+    depthStencilDesc.MiscFlags = 0;
+
+    hr = renderer->pDevice->CreateTexture2D(&depthStencilDesc, nullptr, renderer->pDepthStencilBuffer.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create depth stencil texture");
+        return false;
+    }
+
+    // Create Depth Stencil View from Texture
+    D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+    dsvDesc.Format = depthStencilDesc.Format;
+    dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+    dsvDesc.Texture2D.MipSlice = 0;
+
+    hr = renderer->pDevice->CreateDepthStencilView(renderer->pDepthStencilBuffer.Get(), &dsvDesc, renderer->pDepthStencilView.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create depth stencil view");
+        return false;
+    }
+
+    // Create Depth Stencil State
+    D3D11_DEPTH_STENCIL_DESC dsStateDesc = {};
+    dsStateDesc.DepthEnable = TRUE;
+    dsStateDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+    dsStateDesc.DepthFunc = D3D11_COMPARISON_LESS;
+
+    hr = renderer->pDevice->CreateDepthStencilState(&dsStateDesc, renderer->pDepthStencilState.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create depth stencil state");
+        return false;
+    }
+
+    // Create sampler(s)
+    D3D11_SAMPLER_DESC samp_desc = {};
+    samp_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    samp_desc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    samp_desc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    samp_desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    samp_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    samp_desc.MinLOD = 0;
+    samp_desc.MaxLOD = D3D11_FLOAT32_MAX;
+    hr = renderer->pDevice->CreateSamplerState(&samp_desc, renderer->sampler.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create sampler state");
+        return false;
+    }
+
+    // Creating blend states
+    D3D11_BLEND_DESC default_blend_desc = {};
+    default_blend_desc.RenderTarget[0].BlendEnable = FALSE;
+    default_blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    hr = renderer->pDevice->CreateBlendState(&default_blend_desc, renderer->pDefaultBS.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create default blend state");
+        return false;
+    }
+
+    D3D11_BLEND_DESC additive_blend_desc = {};
+    additive_blend_desc.RenderTarget[0].BlendEnable = TRUE;
+    additive_blend_desc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+    additive_blend_desc.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
+    additive_blend_desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    additive_blend_desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    additive_blend_desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+    additive_blend_desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    additive_blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    hr = renderer->pDevice->CreateBlendState(&additive_blend_desc, renderer->pAdditiveBS.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create additive blend state");
+        return false;
+    }
+
+    // --- Create Constant Buffers --- //
+    // PerObject Constant Buffer
+    D3D11_BUFFER_DESC CBDesc = {};
+    CBDesc.Usage = D3D11_USAGE_DYNAMIC;
+    CBDesc.ByteWidth = sizeof(CBPerObject);
+    CBDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    CBDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    hr = renderer->pDevice->CreateBuffer(&CBDesc, nullptr, renderer->pCBPerObject.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create constant buffer for per object data");
+        return false;
+    }
+
+    // PerFrame Constant Buffer
+    CBDesc.ByteWidth = sizeof(CBPerFrame);
+    hr = renderer->pDevice->CreateBuffer(&CBDesc, nullptr, renderer->pCBPerFrame.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create constant buffer for per frame data");
+        return false;
+    }
+
+    // PerMaterial Constant Buffer
+    CBDesc.ByteWidth = sizeof(CBPerMaterial);
+    hr = renderer->pDevice->CreateBuffer(&CBDesc, nullptr, renderer->pCBPerMaterial.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create constant buffer for per material data");
+        return false;
+    }
+
+    // Invalidate all meshes
+    for (uint8_t i = 0; i < MAX_MESHES; ++i) {
+        id::invalidate(&renderer->meshes[i].id);
+    }
+
+    // Invalidate all materials
+    for (uint8_t i = 0; i < MAX_MATERIALS; ++i) {
+        id::invalidate(&renderer->materials[i].id);
+    }
+
+    // Invalidate all textures
+    for (uint8_t i = 0; i < MAX_TEXTURES; ++i) {
+        id::invalidate(&renderer->textures[i].id);
+    }
+
+    // Initialize the Shader System
+    if (!shader::system_initialize(&renderer->shader_system)) {
+        LOG("%s: Failed to initialize shader system", __func__);
+        return false;
+    }
+
+    // Create the default shader program
+    D3D11_INPUT_ELEMENT_DESC default_shader_input[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+
+    if (!shader::create(L"assets/default_vs.hlsl", L"assets/default_ps.hlsl", renderer->pDevice.Get(), default_shader_input, ARRAYSIZE(default_shader_input), &renderer->default_shader)) {
+        LOG("Renderer error: Failed to create default shader");
+        return false;
+    }
+
+    // Set the viewport
+    D3D11_VIEWPORT vp;
+    vp.Width = (FLOAT)pWindow->width;
+    vp.Height = (FLOAT)pWindow->height;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    vp.TopLeftX = 0;
+    vp.TopLeftY = 0;
+    renderer->pContext->RSSetViewports(1, &vp);
+
+    // Create color and depth buffers for scene
+    renderer->scene_color = texture::create(
+        pWindow->width, pWindow->height,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+        true,
+        nullptr, 0,
+        1, 1, false);
+    renderer->scene_depth = texture::create(
+        pWindow->width, pWindow->height,
+        DXGI_FORMAT_D24_UNORM_S8_UINT,
+        D3D11_BIND_DEPTH_STENCIL,
+        false,
+        nullptr, 0,
+        1, 1, false);
+
+    // Definition of a triangle for color buffer rendering.
+    // Triangle extend beyond clip space bounds so it will
+    // result in a rectangle viewable area.
+    // NOTE: This could be moved to the shader hardcoded, if wanted
+    FSVertex vertices[3] = {
+        {{-1.0f, -1.0f}, {0.0f, 1.0f}},
+        {{-1.0f, 3.0f}, {0.0f, -1.0f}},
+        {{3.0f, -1.0f}, {2.0f, 1.0f}},
+    };
+
+    D3D11_BUFFER_DESC FSVertDesc = {};
+    FSVertDesc.ByteWidth = UINT(sizeof(FSVertex) * 3);
+    FSVertDesc.Usage = D3D11_USAGE_DEFAULT;
+    FSVertDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    FSVertDesc.CPUAccessFlags = 0;
+
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = vertices;
+
+    hr = renderer->pDevice->CreateBuffer(
+        &FSVertDesc,
+        &initData,
+        renderer->pSceneVertexBuffer.GetAddressOf());
+
+    if (FAILED(hr)) {
+        LOG("renderer::initialize: Vertex buffer couldn't be created for fullscreen triangle.");
+        return false;
+    }
+
+    // We need a shader for this, as well
+    D3D11_INPUT_ELEMENT_DESC screen_quad_layout[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+
+    if (!shader::create(L"assets/tonemap_vs.hlsl", L"assets/tonemap_ps.hlsl", renderer->pDevice.Get(), screen_quad_layout, ARRAYSIZE(screen_quad_layout), &renderer->tonemap_shader)) {
+        LOG("Renderer error: Failed to create tonemap shader");
+        return false;
+    }
+
+    // Create Pixel Shaders for bloom pass
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#ifdef _DEBUG
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    Microsoft::WRL::ComPtr<ID3DBlob> pErrorBlob;
+    Microsoft::WRL::ComPtr<ID3DBlob> pVertexBlob;
+    Microsoft::WRL::ComPtr<ID3DBlob> pPixelBlob;
+    // Compile Pixel Shader from file
+    hr = D3DCompileFromFile(
+        L"assets/bloom_ps.hlsl",
+        NULL,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "threshold_main",
+        "ps_5_0",
+        compileFlags,
+        0,
+        pPixelBlob.GetAddressOf(),
+        pErrorBlob.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
+        return false;
+    }
+    hr = renderer->pDevice->CreatePixelShader(
+        pPixelBlob->GetBufferPointer(),
+        pPixelBlob->GetBufferSize(),
+        nullptr,
+        renderer->threshold_ps_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
+        return false;
+    }
+
+    // Reset blobs
+    pErrorBlob.Reset();
+    pVertexBlob.Reset();
+    pPixelBlob.Reset();
+
+    // Compile Pixel Shader from file
+    hr = D3DCompileFromFile(
+        L"assets/bloom_ps.hlsl",
+        NULL,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "downsample_main",
+        "ps_5_0",
+        compileFlags,
+        0,
+        pPixelBlob.GetAddressOf(),
+        pErrorBlob.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
+        return false;
+    }
+    hr = renderer->pDevice->CreatePixelShader(
+        pPixelBlob->GetBufferPointer(),
+        pPixelBlob->GetBufferSize(),
+        nullptr,
+        renderer->downsample_ps_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
+        return false;
+    }
+
+    // Reset blobs
+    pErrorBlob.Reset();
+    pVertexBlob.Reset();
+    pPixelBlob.Reset();
+
+    // Compile Pixel Shader from file
+    hr = D3DCompileFromFile(
+        L"assets/bloom_ps.hlsl",
+        NULL,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "upsample_main",
+        "ps_5_0",
+        compileFlags,
+        0,
+        pPixelBlob.GetAddressOf(),
+        pErrorBlob.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
+        return false;
+    }
+    hr = renderer->pDevice->CreatePixelShader(
+        pPixelBlob->GetBufferPointer(),
+        pPixelBlob->GetBufferSize(),
+        nullptr,
+        renderer->upsample_ps_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
+        return false;
+    }
+
+    // Create textures for bloom pass
+    UINT mip_width = pWindow->width / 2;
+    UINT mip_height = pWindow->height / 2;
+    renderer->mip_count = 0;
+    for (int i = 0; i < 5; ++i) {
+        renderer->bloom_mips[i] = texture::create(
+            mip_width, mip_height,
+            DXGI_FORMAT_R16G16B16A16_FLOAT,
+            D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+            true,
+            nullptr, 0,
+            1, 1, false);
+
+        if (id::is_invalid(renderer->bloom_mips[i])) {
+            LOG("Renderer error: Couldn't create bloomp mip texture %d", i);
+            return false;
+        }
+
+        renderer->mip_count++;
+        mip_width = MAX(mip_width / 2, 1);
+        mip_height = MAX(mip_height / 2, 1);
+    }
+
+    // Create CB for bloom pass
+    D3D11_BUFFER_DESC bloom_cb_desc = {};
+    bloom_cb_desc.Usage = D3D11_USAGE_DYNAMIC;
+    bloom_cb_desc.ByteWidth = sizeof(BloomConstants);
+    bloom_cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    bloom_cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    hr = renderer->pDevice->CreateBuffer(&bloom_cb_desc, nullptr, renderer->bloom_cb_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create constant buffer for bloom pass");
+        return false;
+    }
+
+    // FXAA Pass
+    // Reset blobs
+    pErrorBlob.Reset();
+    pVertexBlob.Reset();
+    pPixelBlob.Reset();
+
+    hr = D3DCompileFromFile(
+        L"assets/fxaa_ps.hlsl",
+        NULL,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main",
+        "ps_5_0",
+        compileFlags,
+        0,
+        pPixelBlob.GetAddressOf(),
+        pErrorBlob.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
+        return false;
+    }
+    hr = renderer->pDevice->CreatePixelShader(
+        pPixelBlob->GetBufferPointer(),
+        pPixelBlob->GetBufferSize(),
+        nullptr,
+        renderer->fxaa_ps_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
+        return false;
+    }
+
+    renderer->fxaa_color = texture::create(
+        pWindow->width, pWindow->height,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+        true,
+        nullptr, 0,
+        1, 1, false);
+    if (id::is_invalid(renderer->fxaa_color)) {
+        LOG("Renderer error: Couldn't initialize texture for FXAA pass");
+        return false;
+    }
+
+    D3D11_BUFFER_DESC fxaa_cb_desc = {};
+    fxaa_cb_desc.Usage = D3D11_USAGE_DYNAMIC;
+    fxaa_cb_desc.ByteWidth = sizeof(FXAAConstants);
+    fxaa_cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    fxaa_cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    hr = renderer->pDevice->CreateBuffer(&fxaa_cb_desc, nullptr, renderer->fxaa_cb_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create constant buffer for bloom pass");
+        return false;
+    }
+
+    // Create the triangle vertex shader for reuse
+    pErrorBlob.Reset();
+    pVertexBlob.Reset();
+
+    // Compile Pixel Shader from file
+    hr = D3DCompileFromFile(
+        L"assets/triangle_vs.hlsl",
+        NULL,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main",
+        "vs_5_0",
+        compileFlags,
+        0,
+        pVertexBlob.GetAddressOf(),
+        pErrorBlob.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: D3DCompileFromFile failed for Default Triangle Vertex Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
+        return false;
+    }
+    hr = renderer->pDevice->CreateVertexShader(
+        pVertexBlob->GetBufferPointer(),
+        pVertexBlob->GetBufferSize(),
+        nullptr,
+        renderer->triangle_vs_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: CreateVertexShader failed for Default Triangle Vertex Shader");
+        return false;
+    }
+
+    // Bind the sampler
+    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
+
+    // Convert 360 HDRi to Cubemap
+    convert_equirectangular_to_cubemap(renderer);
+
+    return true;
+}
+
+void renderer::shutdown(Renderer *renderer) {
+    (void)renderer;
+}
+
+void renderer::begin_frame(Renderer *renderer) {
+    // Bind the sampler
+    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
+    // Bind the default blend state
+    renderer->pContext->OMSetBlendState(renderer->pDefaultBS.Get(), nullptr, 0xFFFFFFFF);
+}
+
+void renderer::end_frame(Renderer *renderer) {
+    renderer->pSwapChain->Present(1, 0);
+}
+
+void renderer::render(Renderer *renderer, Scene *scene) {
+    // Bind and clear the main pass' targets
+    // float clearColor[4] = {0.36f, 0.36f, 0.36f, 1.0f};
+    float clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
+    Texture *scene_depth_tex = &renderer->textures[renderer->scene_depth.id];
+    bind_render_target(renderer, scene_color_tex->rtv[0].Get(), scene_depth_tex->dsv.Get());
+    clear_render_target(renderer, scene_color_tex->rtv[0].Get(), scene_depth_tex->dsv.Get(), clearColor);
+
+    D3D11_VIEWPORT viewport = {};
+    viewport.Width = static_cast<float>(scene_color_tex->width);
+    viewport.Height = static_cast<float>(scene_color_tex->height);
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+    renderer->pContext->RSSetViewports(1, &viewport);
+
+    // Bind the depth stencil state
+    renderer->pContext->OMSetDepthStencilState(renderer->pDepthStencilState.Get(), 1);
+
+    // Rendering scene - meshes, materials...etc.
+    render_scene(renderer, scene);
+
+    // Unbind the depth stencil state
+    renderer->pContext->OMSetDepthStencilState(nullptr, 0);
+
+    // Render FXAA pass
+    render_fxaa_pass(renderer);
+
+    // Render bloom pass
+    render_bloom_pass(renderer);
+
+    // Bind and clear the tonemap pass' targets (which are the swapchain's backbuffer)
+    bind_render_target(renderer, renderer->pRenderTargetView.Get(), nullptr);
+    clear_render_target(renderer, renderer->pRenderTargetView.Get(), nullptr, clearColor);
+
+    // Render the tonemap pass
+    render_tonemap_pass(renderer);
+}
+
+void renderer::render_scene(Renderer *renderer, Scene *scene) {
+    // Update per frame constant buffer
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    HRESULT hr = renderer->pContext->Map(renderer->pCBPerFrame.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to map per object constant buffer");
+        return;
+    }
+    CBPerFrame *perFramePtr = (CBPerFrame *)mappedResource.pData;
+    DirectX::XMStoreFloat4x4(&perFramePtr->viewProjectionMatrix, scene::camera_get_view_projection_matrix(scene->active_cam));
+    perFramePtr->camera_position = scene->active_cam->position;
+    renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
+    renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
+
+    // For now just globally bind our single shader
+    shader::bind(&renderer->default_shader, renderer->pContext.Get());
+
+    // Loop through our meshes from our selected scene
+    MaterialId current_material_bound = id::invalid();
+    for (int i = 0; i < MAX_SCENE_MESHES; ++i) {
+        SceneMesh *mesh = &scene->meshes[i];
+
+        if (id::is_invalid(mesh->id))
+            continue;
+
+        // If the material id is different from the currently bound
+        // bind the new one.
+        if (mesh->material_id.id != current_material_bound.id) {
+            Material *mat = &renderer->materials[mesh->material_id.id];
+            if (id::is_stale(mat->id, mesh->material_id)) {
+                LOG("Material id: %d, Mesh's material id: %d", mat->id.id, mesh->material_id.id);
+                LOG("Renderer error: Material corruption");
+                return;
+            }
+
+            hr = renderer->pContext->Map(renderer->pCBPerMaterial.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+            if (FAILED(hr)) {
+                LOG("Renderer error: Failed to map per material constant buffer");
+                return;
+            }
+            CBPerMaterial *per_mat_ptr = (CBPerMaterial *)mappedResource.pData;
+            per_mat_ptr->albedo = mat->albedo;
+            per_mat_ptr->metallic = mat->metallic;
+            per_mat_ptr->roughness = mat->rougness;
+            per_mat_ptr->emission_color = mat->emission_color;
+            renderer->pContext->Unmap(renderer->pCBPerMaterial.Get(), 0);
+            renderer->pContext->PSSetConstantBuffers(0, 1, renderer->pCBPerMaterial.GetAddressOf());
+
+            // Look up the texture based on the id
+            Texture *albedo_tex = &renderer->textures[mat->albedo_map.id];
+            Texture *metallic_tex = &renderer->textures[mat->metallic_map.id];
+            Texture *roughness_tex = &renderer->textures[mat->roughness_map.id];
+            Texture *normal_tex = &renderer->textures[mat->normal_map.id];
+            Texture *emission_tex = &renderer->textures[mat->emission_map.id];
+            ID3D11ShaderResourceView *srvs[] = {albedo_tex->srv.Get(), metallic_tex->srv.Get(), roughness_tex->srv.Get(), normal_tex->srv.Get(), emission_tex->srv.Get()};
+            renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+            current_material_bound = mat->id;
+        }
+
+        // Lookup the mesh gpu resource through the mesh_id
+        Mesh *gpu_mesh = &renderer->meshes[mesh->mesh_id.id];
+        if (!gpu_mesh || id::is_stale(gpu_mesh->id, mesh->mesh_id)) {
+            continue;
+        }
+
+        // Update per object constant buffer
+        hr = renderer->pContext->Map(renderer->pCBPerObject.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+        if (FAILED(hr)) {
+            LOG("Renderer error: Failed to map per object constant buffer");
+            return;
+        }
+        CBPerObject *perObjectPtr = (CBPerObject *)mappedResource.pData;
+        DirectX::XMStoreFloat4x4(&perObjectPtr->worldMatrix, scene::mesh_get_world_matrix(scene, mesh->mesh_id));
+        renderer->pContext->Unmap(renderer->pCBPerObject.Get(), 0);
+        renderer->pContext->VSSetConstantBuffers(2, 1, renderer->pCBPerObject.GetAddressOf());
+
+        // Draw the mesh
+        mesh::draw(renderer->pContext.Get(), gpu_mesh);
+    }
+}
+
+void renderer::render_bloom_pass(Renderer *renderer) {
+    float clear_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    BloomConstants bloom_constants = {};
+    bloom_constants.bloom_threshold = 1.5f;
+    bloom_constants.bloom_intensity = 1.0f;
+    bloom_constants.bloom_knee = 0.2f;
+
+    // For convenience but could be useful to bypass some dereferencing as well
+    ID3D11DeviceContext *context = renderer->pContext.Get();
+
+    // ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->scene_color.id].srv.Get();
+    ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->fxaa_color.id].srv.Get();
+
+    // 1. Threshold pass
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    context->Map(renderer->bloom_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+    memcpy(mapped.pData, &bloom_constants, sizeof(BloomConstants));
+    context->Unmap(renderer->bloom_cb_ptr.Get(), 0);
+
+    Texture *bloom_mip_1 = &renderer->textures[renderer->bloom_mips[0].id];
+    context->ClearRenderTargetView(bloom_mip_1->rtv[0].Get(), clear_color);
+    context->OMSetRenderTargets(1, bloom_mip_1->rtv[0].GetAddressOf(), nullptr);
+    context->PSSetShader(renderer->threshold_ps_ptr.Get(), nullptr, 0);
+    context->PSSetShaderResources(0, 1, &scene_srv);
+    context->PSSetConstantBuffers(0, 1, renderer->bloom_cb_ptr.GetAddressOf());
+
+    D3D11_VIEWPORT viewport = {};
+    viewport.Width = (float)bloom_mip_1->width;
+    viewport.Height = (float)bloom_mip_1->height;
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+    context->RSSetViewports(1, &viewport);
+
+    // Bind the vertex buffer
+    UINT offset = 0;
+    UINT stride = sizeof(FSVertex);
+    renderer->pContext->IASetVertexBuffers(0, 1, renderer->pSceneVertexBuffer.GetAddressOf(), &stride, &offset);
+    // HACK: I'm digging into the currently inflexible shader struct to find the
+    // vertex shader and I'm binding it here manually
+    context->IASetInputLayout(renderer->tonemap_shader.pInputLayout.Get());
+    context->VSSetShader(renderer->tonemap_shader.pVertexShader.Get(), nullptr, 0);
+    context->Draw(3, 0);
+
+    // 2. Downsample chain
+    context->PSSetShader(renderer->downsample_ps_ptr.Get(), nullptr, 0);
+    for (int i = 1; i < renderer->mip_count; ++i) {
+        Texture *bloom_mip = &renderer->textures[renderer->bloom_mips[i].id];
+
+        // Update texel size for current target mip
+        bloom_constants.texel_size[0] = 1.0f / bloom_mip->width;
+        bloom_constants.texel_size[1] = 1.0f / bloom_mip->height;
+
+        context->Map(renderer->bloom_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        memcpy(mapped.pData, &bloom_constants, sizeof(BloomConstants));
+        context->Unmap(renderer->bloom_cb_ptr.Get(), 0);
+
+        viewport.Width = (float)bloom_mip->width;
+        viewport.Height = (float)bloom_mip->height;
+        context->RSSetViewports(1, &viewport);
+
+        context->ClearRenderTargetView(bloom_mip->rtv[0].Get(), clear_color);
+        context->OMSetRenderTargets(1, bloom_mip->rtv[0].GetAddressOf(), nullptr);
+        context->PSSetShaderResources(0, 1, renderer->textures[renderer->bloom_mips[i - 1].id].srv.GetAddressOf());
+        context->Draw(3, 0);
+    }
+
+    // 3. Upsample chain -- with additive blend state
+    context->OMSetBlendState(renderer->pAdditiveBS.Get(), nullptr, 0xFFFFFFFF);
+    context->PSSetShader(renderer->upsample_ps_ptr.Get(), nullptr, 0);
+    for (int i = renderer->mip_count - 2; i >= 0; --i) {
+        Texture *bloom_mip = &renderer->textures[renderer->bloom_mips[i].id];
+
+        // Update texel size for current target mip
+        bloom_constants.texel_size[0] = 1.0f / bloom_mip->width;
+        bloom_constants.texel_size[1] = 1.0f / bloom_mip->height;
+
+        // Add weights into the mix so each layer can gradually be less intense
+        int upsample_index = renderer->mip_count - 2 - i; // Goes 0 → N-2
+        float t = upsample_index / float(renderer->mip_count - 2);
+        // Smoothstep function
+        float smooth = t * t * (3.0f - 2.0f * t);
+        // Lerp from full (1.0) to low (0.5)
+        bloom_constants.bloom_mip_strength = std::lerp(1.0f, 0.2f, smooth);
+        // LOG("%f", bloom_constants.bloom_mip_strength);
+
+        context->Map(renderer->bloom_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        memcpy(mapped.pData, &bloom_constants, sizeof(BloomConstants));
+        context->Unmap(renderer->bloom_cb_ptr.Get(), 0);
+
+        viewport.Width = (float)bloom_mip->width;
+        viewport.Height = (float)bloom_mip->height;
+        context->RSSetViewports(1, &viewport);
+
+        // No clear, we are adding existing content
+        context->OMSetRenderTargets(1, bloom_mip->rtv[0].GetAddressOf(), nullptr);
+        context->PSSetShaderResources(0, 1, renderer->textures[renderer->bloom_mips[i + 1].id].srv.GetAddressOf());
+        context->Draw(3, 0);
+    }
+
+    context->OMSetBlendState(renderer->pDefaultBS.Get(), nullptr, 0xFFFFFFFF);
+}
+
+void renderer::render_fxaa_pass(Renderer *renderer) {
+    float clear_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    // For convenience but could be useful to bypass some dereferencing as well
+    ID3D11DeviceContext *context = renderer->pContext.Get();
+    ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->scene_color.id].srv.Get();
+
+    Texture *fxaa_texture = &renderer->textures[renderer->fxaa_color.id];
+
+    FXAAConstants fxaa_cb = {};
+    fxaa_cb.texel_size[0] = 1.0f / fxaa_texture->width;
+    fxaa_cb.texel_size[1] = 1.0f / fxaa_texture->height;
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    context->Map(renderer->fxaa_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+    memcpy(mapped.pData, &fxaa_cb, sizeof(FXAAConstants));
+    context->Unmap(renderer->fxaa_cb_ptr.Get(), 0);
+
+    context->ClearRenderTargetView(fxaa_texture->rtv[0].Get(), clear_color);
+    context->OMSetRenderTargets(1, fxaa_texture->rtv[0].GetAddressOf(), nullptr);
+    context->PSSetShader(renderer->fxaa_ps_ptr.Get(), nullptr, 0);
+
+    ID3D11ShaderResourceView *srvs[] = {scene_srv};
+    renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+    context->PSSetConstantBuffers(0, 1, renderer->fxaa_cb_ptr.GetAddressOf());
+
+    D3D11_VIEWPORT viewport = {};
+    viewport.Width = (float)fxaa_texture->width;
+    viewport.Height = (float)fxaa_texture->height;
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+    context->RSSetViewports(1, &viewport);
+
+    // Bind the vertex buffer
+    UINT offset = 0;
+    UINT stride = sizeof(FSVertex);
+    renderer->pContext->IASetVertexBuffers(0, 1, renderer->pSceneVertexBuffer.GetAddressOf(), &stride, &offset);
+    // HACK: I'm digging into the currently inflexible shader struct to find the
+    // vertex shader and I'm binding it here manually
+    context->IASetInputLayout(renderer->tonemap_shader.pInputLayout.Get());
+    context->VSSetShader(renderer->tonemap_shader.pVertexShader.Get(), nullptr, 0);
+
+    context->Draw(3, 0);
+}
+
+void renderer::render_tonemap_pass(Renderer *renderer) {
+    // Bind the shader for the tonemap pass
+    shader::bind(&renderer->tonemap_shader, renderer->pContext.Get());
+
+    // Bind the vertex buffer
+    UINT offset = 0;
+    UINT stride = sizeof(FSVertex);
+    renderer->pContext->IASetVertexBuffers(0, 1, renderer->pSceneVertexBuffer.GetAddressOf(), &stride, &offset);
+
+    // TODO: We are not setting the primitive topology anywhere visible, only in mesh::draw
+    // which is fine for now as D3D11 is a statemachine so we are keeping that state
+    // but we should probably set it somewhere explicitly and clearly.
+    // context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    // Bind previous render target as texture
+    // Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
+    Texture *scene_color_tex = &renderer->textures[renderer->fxaa_color.id];
+    Texture *bloom_tex = &renderer->textures[renderer->bloom_mips[0].id];
+    ID3D11ShaderResourceView *srvs[] = {scene_color_tex->srv.Get(), bloom_tex->srv.Get()};
+    renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+    D3D11_VIEWPORT viewport = {};
+    // TODO: These should be sizes not for INPUT but OUTPUT textures, but it's
+    // basically the same for now
+    viewport.Width = (float)scene_color_tex->width;
+    viewport.Height = (float)scene_color_tex->height;
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+    renderer->pContext->RSSetViewports(1, &viewport);
+
+    // Draw the triangle
+    renderer->pContext->Draw(3, 0);
+
+    // This might be required by D3D11 to unbind resources before we use it as
+    // render targets again but so far there is no complaining so just leaving
+    // it here as a reminder if something happens down the line...
+    // ID3D11ShaderResourceView *nullSRVs[1] = {nullptr};
+    // renderer->pContext->PSSetShaderResources(0, 1, nullSRVs);
+}
+
+void renderer::bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv) {
+    renderer->pContext->OMSetRenderTargets(1, &rtv, dsv);
+}
+
+void renderer::clear_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv, float *clear_color) {
+    if (rtv) {
+        renderer->pContext->ClearRenderTargetView(rtv, clear_color);
+    }
+    if (dsv) {
+        renderer->pContext->ClearDepthStencilView(dsv, D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+    }
+}
+
+bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
+    TextureId hdri = texture::load_hdr("assets/photo_studio_loft_hall_4k.hdr");
+    Texture *hdri_tex = &renderer->textures[hdri.id];
+
+    renderer->cubemap_id = texture::create(
+        512, 512,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+        true,
+        nullptr, 0,
+        6, 1, true);
+
+    // Compile and bind the appropriate shaders
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+#ifdef _DEBUG
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> pixel_shader_ptr;
+    Microsoft::WRL::ComPtr<ID3DBlob> pErrorBlob;
+    Microsoft::WRL::ComPtr<ID3DBlob> pPixelBlob;
+    // Compile Pixel Shader from file
+    HRESULT hr = D3DCompileFromFile(
+        L"assets/equirect_to_cube.hlsl",
+        NULL,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "ps_main",
+        "ps_5_0",
+        compileFlags,
+        0,
+        pPixelBlob.GetAddressOf(),
+        pErrorBlob.GetAddressOf());
+    if (FAILED(hr)) {
+        // TODO: these logs need to be updated at one point!
+        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
+        return false;
+    }
+    hr = renderer->pDevice->CreatePixelShader(
+        pPixelBlob->GetBufferPointer(),
+        pPixelBlob->GetBufferSize(),
+        nullptr,
+        pixel_shader_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Buffer> face_cb_ptr;
+
+    // Create Constant Buffer for conversion
+    D3D11_BUFFER_DESC cb_desc = {};
+    cb_desc.Usage = D3D11_USAGE_DYNAMIC;
+    cb_desc.ByteWidth = sizeof(CBEquirectToCube);
+    cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    hr = renderer->pDevice->CreateBuffer(&cb_desc, nullptr, face_cb_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create constant buffer for bloom pass");
+        return false;
+    }
+
+    // Bind shaders
+    renderer->pContext->VSSetShader(renderer->triangle_vs_ptr.Get(), nullptr, 0);
+    renderer->pContext->PSSetShader(pixel_shader_ptr.Get(), nullptr, 0);
+
+    const float clear_color[4] = {0, 0, 0, 1};
+
+    Texture *cubemap_tex = &renderer->textures[renderer->cubemap_id.id];
+
+    D3D11_VIEWPORT viewport = {};
+    viewport.Width = static_cast<float>(cubemap_tex->width);
+    viewport.Height = static_cast<float>(cubemap_tex->height);
+    viewport.MinDepth = 0.0f;
+    viewport.MaxDepth = 1.0f;
+    renderer->pContext->RSSetViewports(1, &viewport);
+
+    ID3D11ShaderResourceView *srvs[] = {hdri_tex->srv.Get()};
+    renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+    for (int face = 0; face < 6; ++face) {
+        // Update constant buffer with face index
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        renderer->pContext->Map(face_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        ((CBEquirectToCube *)mapped.pData)->face_index = face;
+        renderer->pContext->Unmap(face_cb_ptr.Get(), 0);
+
+        // Set the face index cb on geo shader
+        renderer->pContext->PSSetConstantBuffers(0, 1, face_cb_ptr.GetAddressOf());
+
+        renderer->pContext->OMSetRenderTargets(1, cubemap_tex->rtv[face].GetAddressOf(), nullptr);
+        renderer->pContext->ClearRenderTargetView(cubemap_tex->rtv[face].Get(), clear_color);
+
+        renderer->pContext->Draw(3, 0);
+    }
+
+    return true;
+}
+
+// bool renderer::generate_irradiance_cubemap(Renderer *renderer) {
+//     const uint16_t irradiance_size = 32;
+//     TextureId irradiance_cubemap = texture::create(
+//         irradiance_size,
+//         irradiance_size,
+//         DXGI_FORMAT_R16G16B16A16_FLOAT,
+//         D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+//         true,
+//         nullptr,
+//         0,
+//         6,
+//         1,
+//         true);
+//
+//     return true;
+// }
+
+void renderer::on_window_resize(Renderer *renderer, uint16_t width, uint16_t height) {
+    // Get the renderer state from the application
+    // RendererState *state = Application::GetRenderer();
+
+    // TODO: I think main context pointers should be hoisted here
+    // like device, swapchain, context... anything we use in this block
+
+    // Early return if we don't have a swapchain
+    // TODO: Check if WLR ComPtr work ctx way
+    if (!renderer->pSwapChain) {
+        return;
+    }
+
+    // Unbind render targets from the Output Merger stage
+    renderer->pContext->OMSetRenderTargets(0, nullptr, nullptr);
+
+    // Release existing render target view
+    // This is safe even if it's null
+    renderer->pRenderTargetView.Reset();
+    // Release old DSV and buffer texture
+    renderer->pDepthStencilView.Reset();
+    renderer->pDepthStencilBuffer.Reset();
+
+    // Resize swap chain buffers
+    HRESULT hr = renderer->pSwapChain->ResizeBuffers(
+        0, // Keep existing buffer count
+        width, height,
+        DXGI_FORMAT_UNKNOWN, // Keep existing format
+        0);
+
+    if (FAILED(hr)) {
+        LOG("Renderer error: resource resizing failed");
+        return;
+    }
+
+    // Recreate size dependent resources
+    // TODO: Move to a separate private function so I can use it
+    // when initializing everything, as well.
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> pBackBuffer;
+    hr = renderer->pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    if (FAILED(hr)) {
+        LOG("Renderer error: Couldn't get the backbuffer texture");
+        return;
+    }
+
+    // Now get the render target view (we only need one as we'll only have a single window)
+    hr = renderer->pDevice->CreateRenderTargetView(pBackBuffer.Get(), nullptr, renderer->pRenderTargetView.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create RenderTargetView");
+        return;
+    }
+
+    // Create Depth Stencil Texture
+    D3D11_TEXTURE2D_DESC depthStencilDesc = {};
+    depthStencilDesc.Width = width;
+    depthStencilDesc.Height = height;
+    depthStencilDesc.MipLevels = 1;
+    depthStencilDesc.ArraySize = 1;
+    depthStencilDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    depthStencilDesc.SampleDesc.Count = 1;
+    depthStencilDesc.SampleDesc.Quality = 0;
+    depthStencilDesc.Usage = D3D11_USAGE_DEFAULT;
+    depthStencilDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    depthStencilDesc.CPUAccessFlags = 0;
+    depthStencilDesc.MiscFlags = 0;
+
+    hr = renderer->pDevice->CreateTexture2D(&depthStencilDesc, nullptr, renderer->pDepthStencilBuffer.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create depth stencil texture");
+        return;
+    }
+
+    // Create Depth Stencil View from Texture
+    D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+    dsvDesc.Format = depthStencilDesc.Format;
+    dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+    dsvDesc.Texture2D.MipSlice = 0;
+
+    hr = renderer->pDevice->CreateDepthStencilView(renderer->pDepthStencilBuffer.Get(), &dsvDesc, renderer->pDepthStencilView.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create depth stencil view");
+        return;
+    }
+
+    // Set the viewport
+    D3D11_VIEWPORT vp;
+    vp.Width = (FLOAT)width;
+    vp.Height = (FLOAT)height;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    vp.TopLeftX = 0;
+    vp.TopLeftY = 0;
+    renderer->pContext->RSSetViewports(1, &vp);
+
+    // Tell the camera about the new aspect ratio
+    Scene *scenes = application::get_scenes();
+    scene::camera_set_active_aspect_ratio(&scenes[0], width / (float)height);
+}
+
+ID3D11Device *renderer::get_device(Renderer *renderer) {
+    return renderer->pDevice.Get();
+}

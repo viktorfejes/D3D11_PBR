@@ -1,0 +1,73 @@
+{
+    "scenes": [
+        {
+            "meshes": [
+                {
+                    "mesh_id": 0,
+                    "material_id": 0,
+                    "position": [0.0, 0.0, 0.0],
+                    "rotation": [45.0, 45.0, 0.0],
+                    "scale": [1.0, 1.0, 1.0]
+                }
+            ],
+            "cameras": [
+                {
+                    "fov": 45.0,
+                    "znear": 0.1,
+                    "zfar": 1000.0,
+                    "aspect_ratio": 1.77777777,
+                    "position": [0.0, 0.0, -8.0],
+                    "target": [0.0, 0.0, 0.0],
+                    "up": [0.0, 1.0, 0.0]
+                }
+            ]
+        }
+    ],
+    "meshes": [
+        {
+            "id": 0,
+            "path": "assets/im_mask.glb"
+        }
+    ],
+    "textures": [
+        {
+            "id": 0,
+            "path": "assets/ironman_tex/ironman_mask_DefaultMaterial_BaseColor_sRGB.1001.png",
+            "srgb": true
+        },
+        {
+            "id": 1,
+            "path": "assets/ironman_tex/ironman_mask_DefaultMaterial_Roughness_Raw.1001.png",
+            "srgb": false
+        },
+        {
+            "id": 2,
+            "path": "assets/ironman_tex/ironman_mask_DefaultMaterial_Normal_Raw.1001.png",
+            "srgb": false
+        },
+        {
+            "id": 3,
+            "path": "assets/ironman_tex/ironman_mask_DefaultMaterial_Metallic_Raw.1001.png",
+            "srgb": false
+        },
+        {
+            "id": 4,
+            "path": "assets/ironman_tex/ironman_mask_DefaultMaterial_Emissive_sRGB.1001.png",
+            "srgb": true 
+        }
+    ],
+    "materials": [
+        {
+            "id": 0,
+            "albedo": [1.0, 1.0, 1.0],
+            "albedo_map": 0,
+            "roughness": 0.5,
+            "roughness_map": 1,
+            "metallic": 0.0,
+            "metallic_map": 3,
+            "normal_map": 2,
+            "emission": [5.0, 5.0, 5.0],
+            "emission_map": 4
+        }
+    ]
+}

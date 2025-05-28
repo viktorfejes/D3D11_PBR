@@ -1,0 +1,59 @@
+{
+    "scenes": [
+        {
+            "meshes": [
+                {
+                    "mesh_id": 0,
+                    "material_id": 0,
+                    "position": [0.0, 0.0, 0.0],
+                    "rotation": [0.0, 0.0, 0.0],
+                    "scale": [1.0, 1.0, 1.0]
+                }
+            ],
+            "cameras": [
+                {
+                    "fov": 45.0,
+                    "znear": 0.1,
+                    "zfar": 10.0,
+                    "aspect_ratio": 1.77777777,
+                    "position": [0.0, 0.0, 5.0],
+                    "target": [0.0, 0.0, 0.0],
+                    "up": [0.0, 1.0, 0.0]
+                }
+            ]
+        }
+    ],
+    "meshes": [
+        {
+            "id": 0,
+            "path": "assets/ironman.glb"
+        }
+    ],
+    "textures": [
+        {
+            "id": 0,
+            "path": "assets/drone_albedo.png",
+            "srgb": true
+        },
+        {
+            "id": 1,
+            "path": "assets/drone_roughness.png",
+            "srgb": false
+        },
+        {
+            "id": 2,
+            "path": "assets/drone_normal.jpeg",
+            "srgb": false
+        }
+    ],
+    "materials": [
+        {
+            "albedo": [1.0, 1.0, 1.0],
+            "albedo_map": 0,
+            "roughness": 0.5,
+            "roughness_map": 1,
+            "metallic": 0.0,
+            "normal_map": 2
+        }
+    ]
+}
