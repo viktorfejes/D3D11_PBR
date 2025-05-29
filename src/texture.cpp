@@ -262,3 +262,9 @@ TextureId texture::create(uint16_t width,
 
     return t->id;
 }
+
+Texture *texture::get(TextureId id) {
+    // TODO: Which would require me to create a texture system...
+    (void)id;
+    return nullptr;
+}

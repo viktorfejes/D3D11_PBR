@@ -1,8 +1,9 @@
-Texture2D albedoTex : register(t0);
-Texture2D metallicTex : register(t1);
-Texture2D roughnessTex : register(t2);
-Texture2D normalTex : register(t3);
-Texture2D emissionTex : register(t4);
+TextureCube irradianceMap : register(t0);
+Texture2D albedoTex : register(t1);
+Texture2D metallicTex : register(t2);
+Texture2D roughnessTex : register(t3);
+Texture2D normalTex : register(t4);
+Texture2D emissionTex : register(t5);
 SamplerState samp : register(s0);
 
 cbuffer PerMaterialConstants : register(b0) {
@@ -167,8 +168,13 @@ float4 main(PS_Input input) : SV_TARGET {
     // The roughness value from the sample
     float roughnessSample = roughness * roughnessTex.Sample(samp, input.TexCoord).r;
 
+    float3 metallicSample = metallic * metallicTex.Sample(samp, input.TexCoord).rgb;
+
     // Emission combined with the emission texture
     float3 emissionSample = emission_color * emissionTex.Sample(samp, input.TexCoord).rgb;
+
+    // Irradiance Map for diffuse reflections
+    float3 irradiance = irradianceMap.Sample(samp, input.NormalWS).rgb;
 
     // Diffuse BRDF
     float3 sheenColor = float3(0.0f, 0.0f, 0.0f);
@@ -186,7 +192,7 @@ float4 main(PS_Input input) : SV_TARGET {
     float3 Fr = (D * G) * F; 
 
     float3 emission = emissionSample;
-    float3 BRDF = (1.0 - metallic) * Fd + Fr;
+    float3 BRDF = (1.0 - metallicSample) * Fd + Fr;
     float3 Li = lightColor * lightIntensity;
 
     float3 Lo = emission + (BRDF * Li * NdotL);

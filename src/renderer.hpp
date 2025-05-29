@@ -121,6 +121,8 @@ struct Renderer {
 
     // TEMP: Cubemap texture id
     TextureId cubemap_id;
+    TextureId irradiance_cubemap;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> face_cb_ptr;
 };
 
 namespace renderer {

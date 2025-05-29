@@ -379,7 +379,10 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
 
     // Convert 360 HDRi to Cubemap
-    // convert_equirectangular_to_cubemap(renderer);
+    convert_equirectangular_to_cubemap(renderer);
+
+    // Generate Irradiance map from the cubemap
+    generate_irradiance_cubemap(renderer);
 
     return true;
 }
@@ -640,6 +643,13 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
     ShaderPipeline *pbr_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->pbr_shader);
     shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), pbr_pipeline);
 
+    // Grab the irradiance map
+    // Texture *irradiance_tex = &renderer->textures[renderer->cubemap_id.id];
+    Texture *irradiance_tex = &renderer->textures[renderer->irradiance_cubemap.id];
+    if (irradiance_tex) {
+        renderer->pContext->PSSetShaderResources(0, 1, irradiance_tex->srv.GetAddressOf());
+    }
+
     // Loop through our meshes from our selected scene
     MaterialId current_material_bound = id::invalid();
     for (int i = 0; i < MAX_SCENE_MESHES; ++i) {
@@ -678,7 +688,7 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
             Texture *normal_tex = &renderer->textures[mat->normal_map.id];
             Texture *emission_tex = &renderer->textures[mat->emission_map.id];
             ID3D11ShaderResourceView *srvs[] = {albedo_tex->srv.Get(), metallic_tex->srv.Get(), roughness_tex->srv.Get(), normal_tex->srv.Get(), emission_tex->srv.Get()};
-            renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+            renderer->pContext->PSSetShaderResources(1, ARRAYSIZE(srvs), srvs);
 
             current_material_bound = mat->id;
         }
@@ -920,8 +930,6 @@ bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
         nullptr, 0,
         6, 1, true);
 
-    Microsoft::WRL::ComPtr<ID3D11Buffer> face_cb_ptr;
-
     // Create Constant Buffer for conversion
     D3D11_BUFFER_DESC cb_desc = {};
     cb_desc.Usage = D3D11_USAGE_DYNAMIC;
@@ -929,7 +937,7 @@ bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
     cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
-    HRESULT hr = renderer->pDevice->CreateBuffer(&cb_desc, nullptr, face_cb_ptr.GetAddressOf());
+    HRESULT hr = renderer->pDevice->CreateBuffer(&cb_desc, nullptr, renderer->face_cb_ptr.GetAddressOf());
     if (FAILED(hr)) {
         LOG("Renderer error: Failed to create constant buffer for bloom pass");
         return false;
@@ -980,12 +988,12 @@ bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
     for (int face = 0; face < 6; ++face) {
         // Update constant buffer with face index
         D3D11_MAPPED_SUBRESOURCE mapped;
-        renderer->pContext->Map(face_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        renderer->pContext->Map(renderer->face_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
         ((CBEquirectToCube *)mapped.pData)->face_index = face;
-        renderer->pContext->Unmap(face_cb_ptr.Get(), 0);
+        renderer->pContext->Unmap(renderer->face_cb_ptr.Get(), 0);
 
-        // Set the face index cb on geo shader
-        renderer->pContext->PSSetConstantBuffers(0, 1, face_cb_ptr.GetAddressOf());
+        // Set the face index cb on ps shader
+        renderer->pContext->PSSetConstantBuffers(0, 1, renderer->face_cb_ptr.GetAddressOf());
 
         renderer->pContext->OMSetRenderTargets(1, cubemap_tex->rtv[face].GetAddressOf(), nullptr);
         renderer->pContext->ClearRenderTargetView(cubemap_tex->rtv[face].Get(), clear_color);
@@ -996,22 +1004,85 @@ bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
     return true;
 }
 
-// bool renderer::generate_irradiance_cubemap(Renderer *renderer) {
-//     const uint16_t irradiance_size = 32;
-//     TextureId irradiance_cubemap = texture::create(
-//         irradiance_size,
-//         irradiance_size,
-//         DXGI_FORMAT_R16G16B16A16_FLOAT,
-//         D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
-//         true,
-//         nullptr,
-//         0,
-//         6,
-//         1,
-//         true);
-//
-//     return true;
-// }
+bool renderer::generate_irradiance_cubemap(Renderer *renderer) {
+    // TODO: Currently this is hardcoded here and in the shader
+    const uint16_t irradiance_size = 32;
+
+    renderer->irradiance_cubemap = texture::create(
+        irradiance_size,
+        irradiance_size,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+        true,
+        nullptr,
+        0,
+        6,
+        1,
+        true);
+    Texture *irradiance_tex = &renderer->textures[renderer->irradiance_cubemap.id];
+
+    ShaderId irradiance_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/irradiance_conv.ps.hlsl",
+        SHADER_STAGE_PS,
+        "main");
+
+    if (id::is_invalid(irradiance_ps)) {
+        LOG("%s: Couldn't create pixel shader module for Irradiance Convolution", __func__);
+        return false;
+    }
+
+    ShaderId irradiance_modules[] = {renderer->fullscreen_triangle_vs, irradiance_ps};
+    PipelineId irradiance_shader = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        irradiance_modules,
+        ARRAYSIZE(irradiance_modules),
+        nullptr, 0);
+
+    if (id::is_invalid(irradiance_shader)) {
+        LOG("%s: Couldn't create shader pipeline for Irradiance Convolution", __func__);
+        return false;
+    }
+
+    // Bind shaders
+    ShaderPipeline *irradiance_pipeline = shader::get_pipeline(&renderer->shader_system, irradiance_shader);
+    shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), irradiance_pipeline);
+
+    // const float clear_color[4] = {0, 0, 0, 1};
+    // renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
+
+    Texture *env_map = &renderer->textures[renderer->cubemap_id.id];
+
+    D3D11_VIEWPORT viewport = {};
+    viewport.Width = (float)irradiance_size;
+    viewport.Height = (float)irradiance_size;
+    viewport.MaxDepth = 1.0f;
+    renderer->pContext->RSSetViewports(1, &viewport);
+
+    for (int face = 0; face < 6; ++face) {
+        // Update constant buffer with face index
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        renderer->pContext->Map(renderer->face_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        ((CBEquirectToCube *)mapped.pData)->face_index = face;
+        renderer->pContext->Unmap(renderer->face_cb_ptr.Get(), 0);
+
+        // Set the face index cb on ps shader
+        renderer->pContext->PSSetConstantBuffers(0, 1, renderer->face_cb_ptr.GetAddressOf());
+
+        // Set target
+        renderer->pContext->OMSetRenderTargets(1, irradiance_tex->rtv[face].GetAddressOf(), nullptr);
+        
+        // Bind environment map SRV
+        renderer->pContext->PSSetShaderResources(0, 1, env_map->srv.GetAddressOf());
+
+        // Draw
+        renderer->pContext->Draw(3, 0);
+    }
+
+    return true;
+}
 
 void renderer::on_window_resize(Renderer *renderer, uint16_t width, uint16_t height) {
     // Get the renderer state from the application

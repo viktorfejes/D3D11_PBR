@@ -33,5 +33,6 @@ TextureId create(uint16_t width,
                  uint32_t array_size,
                  uint32_t mip_levels,
                  bool is_cubemap);
+Texture *get(TextureId id);
 
 } // namespace texture
