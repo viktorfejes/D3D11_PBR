@@ -21,8 +21,8 @@ float3 getDirectionForFace(uint faceIndex, float2 uv) {
     switch (faceIndex) {
         case 0: dir = float3(1.0, uv.y, -uv.x); break;
         case 1: dir = float3(-1.0, uv.y, uv.x); break;
-        case 2: dir = float3(uv.x, 1.0, -uv.y); break;
-        case 3: dir = float3(uv.x, -1.0f, uv.y); break;
+        case 2: dir = float3(uv.x, -1.0f, uv.y); break;
+        case 3: dir = float3(uv.x, 1.0, -uv.y); break;
         case 4: dir = float3(uv.x, uv.y, 1.0); break;
         case 5: dir = float3(-uv.x, uv.y, -1.0); break;
     }

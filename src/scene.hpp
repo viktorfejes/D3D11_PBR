@@ -58,6 +58,8 @@ DirectX::XMFLOAT3 mesh_get_rotation(Scene *scene, Id scene_mesh_id);
 DirectX::XMMATRIX mesh_get_world_matrix(Scene *scene, Id scene_mesh_id);
 
 DirectX::XMMATRIX camera_get_view_projection_matrix(SceneCamera *camera);
+DirectX::XMFLOAT4X4 camera_get_view_matrix(SceneCamera *camera);
+DirectX::XMFLOAT4X4 camera_get_projection_matrix(SceneCamera *camera);
 float camera_get_yaw(Scene *scene, Id scene_cam_id);
 float camera_get_pitch(Scene *scene, Id scene_cam_id);
 float camera_get_distance(Scene *scene, Id scene_cam_id);

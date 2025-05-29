@@ -4,7 +4,6 @@
 #include "material.hpp"
 #include "mesh.hpp"
 #include "scene.hpp"
-#include "shader.hpp"
 #include "shader_system.hpp"
 #include "texture.hpp"
 #include "window.hpp"
@@ -18,12 +17,18 @@
 #define MAX_TEXTURES 64
 
 // NOTE: Should be 16 byte aligned
-// TODO: Check if there is a way in C++ to force structs
-// to a certain alignment.
 struct alignas(16) CBPerFrame {
+    // DirectX::XMFLOAT4X4 view_matrix;
+    // DirectX::XMFLOAT4X4 projection_matrix;
     DirectX::XMFLOAT4X4 viewProjectionMatrix;
     DirectX::XMFLOAT3 camera_position;
-    float padding;
+    float padding[13];
+};
+
+// I might merge this with the per frame Constant Buffer
+struct alignas(16) CBSkybox {
+    DirectX::XMFLOAT4X4 view_matrix;
+    DirectX::XMFLOAT4X4 projection_matrix;
 };
 
 struct alignas(16) CBPerObject {
@@ -72,10 +77,16 @@ struct Renderer {
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> pRenderTargetView;
     Microsoft::WRL::ComPtr<ID3D11DepthStencilView> pDepthStencilView;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> pDepthStencilBuffer;
+
     Microsoft::WRL::ComPtr<ID3D11DepthStencilState> pDepthStencilState;
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> skybox_depth_state;
 
     // Temporary "global" sampler
     Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> skybox_sampler;
+
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState> default_raster;
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState> skybox_raster;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> pCBPerObject;
     Microsoft::WRL::ComPtr<ID3D11Buffer> pCBPerFrame;
@@ -123,6 +134,9 @@ struct Renderer {
     TextureId cubemap_id;
     TextureId irradiance_cubemap;
     Microsoft::WRL::ComPtr<ID3D11Buffer> face_cb_ptr;
+
+    Microsoft::WRL::ComPtr<ID3D11Buffer> skybox_cb_ptr;
+    PipelineId skybox_shader;
 };
 
 namespace renderer {
@@ -135,6 +149,7 @@ PipelineId create_pbr_shader_pipeline(Renderer *renderer);
 PipelineId create_tonemap_shader_pipeline(Renderer *renderer);
 bool create_bloom_shader_pipeline(Renderer *renderer, PipelineId *threshold_pipeline, PipelineId *downsample_pipeline, PipelineId *upsample_pipeline);
 PipelineId create_fxaa_pipeline(Renderer *renderer);
+PipelineId create_skybox_pipeline(Renderer *renderer);
 
 void begin_frame(Renderer *renderer);
 void end_frame(Renderer *renderer);
@@ -144,6 +159,8 @@ void render_scene(Renderer *renderer, Scene *scene);
 void render_bloom_pass(Renderer *renderer);
 void render_fxaa_pass(Renderer *renderer);
 void render_tonemap_pass(Renderer *renderer);
+void render_skybox(Renderer *renderer, SceneCamera *camera);
+
 void bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv);
 void clear_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv, float *clear_color);
 

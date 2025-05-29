@@ -129,23 +129,47 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     dsStateDesc.DepthEnable = TRUE;
     dsStateDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     dsStateDesc.DepthFunc = D3D11_COMPARISON_LESS;
-
     hr = renderer->pDevice->CreateDepthStencilState(&dsStateDesc, renderer->pDepthStencilState.GetAddressOf());
     if (FAILED(hr)) {
         LOG("Renderer error: Failed to create depth stencil state");
         return false;
     }
 
-    // Create sampler(s)
+    D3D11_DEPTH_STENCIL_DESC skybox_depth_desc = {};
+    skybox_depth_desc.DepthEnable = TRUE;
+    skybox_depth_desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    skybox_depth_desc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    skybox_depth_desc.StencilReadMask = D3D11_DEFAULT_STENCIL_READ_MASK;
+    skybox_depth_desc.StencilWriteMask = D3D11_DEFAULT_STENCIL_WRITE_MASK;
+    hr = renderer->pDevice->CreateDepthStencilState(&skybox_depth_desc, renderer->skybox_depth_state.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create depth stencil state");
+        return false;
+    }
+
+    // Create default sampler(s)
     D3D11_SAMPLER_DESC samp_desc = {};
     samp_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     samp_desc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
     samp_desc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
     samp_desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
     samp_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-    samp_desc.MinLOD = 0;
     samp_desc.MaxLOD = D3D11_FLOAT32_MAX;
     hr = renderer->pDevice->CreateSamplerState(&samp_desc, renderer->sampler.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create sampler state");
+        return false;
+    }
+
+    D3D11_SAMPLER_DESC skybox_samp_desc = {};
+    skybox_samp_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    skybox_samp_desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    skybox_samp_desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    skybox_samp_desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    skybox_samp_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    skybox_samp_desc.MaxAnisotropy = 1;
+    skybox_samp_desc.MaxLOD = D3D11_FLOAT32_MAX;
+    hr = renderer->pDevice->CreateSamplerState(&skybox_samp_desc, renderer->skybox_sampler.GetAddressOf());
     if (FAILED(hr)) {
         LOG("Renderer error: Failed to create sampler state");
         return false;
@@ -173,6 +197,27 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     hr = renderer->pDevice->CreateBlendState(&additive_blend_desc, renderer->pAdditiveBS.GetAddressOf());
     if (FAILED(hr)) {
         LOG("Renderer error: Failed to create additive blend state");
+        return false;
+    }
+
+    // Creating raster states
+    D3D11_RASTERIZER_DESC default_raster_desc = {};
+    default_raster_desc.FillMode = D3D11_FILL_SOLID;
+    default_raster_desc.CullMode = D3D11_CULL_BACK;
+    default_raster_desc.DepthClipEnable = TRUE;
+    hr = renderer->pDevice->CreateRasterizerState(&default_raster_desc, renderer->default_raster.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("%s: Failed to create default rasterizer state state", __func__);
+        return false;
+    }
+
+    D3D11_RASTERIZER_DESC skybox_raster_desc = {};
+    skybox_raster_desc.FillMode = D3D11_FILL_SOLID;
+    skybox_raster_desc.CullMode = D3D11_CULL_FRONT;
+    skybox_raster_desc.DepthClipEnable = TRUE;
+    hr = renderer->pDevice->CreateRasterizerState(&skybox_raster_desc, renderer->skybox_raster.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("%s: Failed to create skybox rasterizer state state", __func__);
         return false;
     }
 
@@ -257,6 +302,13 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     renderer->fxaa_shader = create_fxaa_pipeline(renderer);
     if (id::is_invalid(renderer->fxaa_shader)) {
         LOG("%s: Couldn't create fxaa shader pipeline", __func__);
+        return false;
+    }
+
+    // Create pipeline for skybox
+    renderer->skybox_shader = create_skybox_pipeline(renderer);
+    if (id::is_invalid(renderer->skybox_shader)) {
+        LOG("%s: Couldn't create skybox shader pipeline", __func__);
         return false;
     }
 
@@ -575,11 +627,72 @@ PipelineId renderer::create_fxaa_pipeline(Renderer *renderer) {
     return fxaa_pipeline;
 }
 
+PipelineId renderer::create_skybox_pipeline(Renderer *renderer) {
+    ShaderId skybox_vs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/skybox.vs.hlsl",
+        SHADER_STAGE_VS,
+        "main");
+
+    if (id::is_invalid(skybox_vs)) {
+        LOG("%s: Couldn't create shader module for skybox vertex shader", __func__);
+        return id::invalid();
+    }
+
+    ShaderId skybox_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/skybox.ps.hlsl",
+        SHADER_STAGE_PS,
+        "main");
+
+    if (id::is_invalid(skybox_ps)) {
+        LOG("%s: Couldn't create shader module for skybox pixel shader", __func__);
+        return id::invalid();
+    }
+
+    ShaderId skybox_modules[] = {skybox_vs, skybox_ps};
+
+    PipelineId skybox_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        skybox_modules,
+        ARRAYSIZE(skybox_modules),
+        nullptr, 0);
+
+    if (id::is_invalid(skybox_pipeline)) {
+        LOG("%s: Couldn't create shader pipeline for bloom's skybox stage", __func__);
+        return id::invalid();
+    }
+
+    // Create constant buffer for skybox
+    // TODO: Might want to merge this with regular camera/view/projection
+    D3D11_BUFFER_DESC skybox_cb_desc = {};
+    skybox_cb_desc.Usage = D3D11_USAGE_DYNAMIC;
+    skybox_cb_desc.ByteWidth = sizeof(CBSkybox);
+    skybox_cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    skybox_cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    HRESULT hr = renderer->pDevice->CreateBuffer(&skybox_cb_desc, nullptr, renderer->skybox_cb_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create constant buffer for skybox");
+        return id::invalid();
+    }
+
+    return skybox_pipeline;
+}
+
 void renderer::begin_frame(Renderer *renderer) {
+    ID3D11DeviceContext *context = renderer->pContext.Get();
+
     // Bind the sampler
-    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
+    context->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
     // Bind the default blend state
-    renderer->pContext->OMSetBlendState(renderer->pDefaultBS.Get(), nullptr, 0xFFFFFFFF);
+    context->OMSetBlendState(renderer->pDefaultBS.Get(), nullptr, 0xFFFFFFFF);
+
+    context->OMSetDepthStencilState(renderer->pDepthStencilState.Get(), 0);
+    context->RSSetState(renderer->default_raster.Get());
 }
 
 void renderer::end_frame(Renderer *renderer) {
@@ -644,7 +757,6 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
     shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), pbr_pipeline);
 
     // Grab the irradiance map
-    // Texture *irradiance_tex = &renderer->textures[renderer->cubemap_id.id];
     Texture *irradiance_tex = &renderer->textures[renderer->irradiance_cubemap.id];
     if (irradiance_tex) {
         renderer->pContext->PSSetShaderResources(0, 1, irradiance_tex->srv.GetAddressOf());
@@ -713,6 +825,13 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
         // Draw the mesh
         mesh::draw(renderer->pContext.Get(), gpu_mesh);
     }
+
+    // Render the skybox on top, using the same render target
+    render_skybox(renderer, scene->active_cam);
+
+    // Reset states?
+    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
+    renderer->pContext->RSSetState(renderer->default_raster.Get());
 }
 
 void renderer::render_bloom_pass(Renderer *renderer) {
@@ -905,6 +1024,42 @@ void renderer::render_tonemap_pass(Renderer *renderer) {
     // renderer->pContext->PSSetShaderResources(0, 1, nullSRVs);
 }
 
+void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
+    ShaderPipeline *skybox_shader = shader::get_pipeline(&renderer->shader_system, renderer->skybox_shader);
+    if (!skybox_shader) {
+        LOG("%s: Warning! Skybox shader couldn't be retrieved. Skipping.", __func__);
+        return;
+    }
+
+    ID3D11DeviceContext *context = renderer->pContext.Get();
+
+    // Bind the skybox shader
+    shader::bind_pipeline(&renderer->shader_system, context, skybox_shader);
+
+    // Bind the skybox states
+    context->OMSetDepthStencilState(renderer->skybox_depth_state.Get(), 0);
+    context->RSSetState(renderer->skybox_raster.Get());
+    context->PSSetSamplers(0, 1, renderer->skybox_sampler.GetAddressOf());
+
+    // Set the environment texture as an input
+    Texture *env_map = &renderer->textures[renderer->cubemap_id.id];
+    context->PSSetShaderResources(0, 1, env_map->srv.GetAddressOf());
+
+    // Set the camera view and projections
+    CBSkybox skybox_cb = {};
+    skybox_cb.view_matrix = scene::camera_get_view_matrix(camera);
+    skybox_cb.projection_matrix = scene::camera_get_projection_matrix(camera);
+
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    context->Map(renderer->skybox_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+    memcpy(mapped.pData, &skybox_cb, sizeof(CBSkybox));
+    context->Unmap(renderer->skybox_cb_ptr.Get(), 0);
+    context->VSSetConstantBuffers(0, 1, renderer->skybox_cb_ptr.GetAddressOf());
+    
+    // Draw cube hardcoded into vertex shader
+    context->Draw(36, 0);
+}
+
 void renderer::bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv) {
     renderer->pContext->OMSetRenderTargets(1, &rtv, dsv);
 }
@@ -1073,7 +1228,7 @@ bool renderer::generate_irradiance_cubemap(Renderer *renderer) {
 
         // Set target
         renderer->pContext->OMSetRenderTargets(1, irradiance_tex->rtv[face].GetAddressOf(), nullptr);
-        
+
         // Bind environment map SRV
         renderer->pContext->PSSetShaderResources(0, 1, env_map->srv.GetAddressOf());
 

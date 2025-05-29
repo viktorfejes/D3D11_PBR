@@ -184,6 +184,35 @@ DirectX::XMMATRIX scene::camera_get_view_projection_matrix(SceneCamera *camera) 
     return camera->view_projection_matrix;
 }
 
+DirectX::XMFLOAT4X4 scene::camera_get_view_matrix(SceneCamera *camera) {
+    assert(camera && "scene::camera_get_view_projection_matrix: Camera pointer cannot be NULL");
+
+    if (camera->is_view_dirty) {
+        camera->view_matrix = DirectX::XMMatrixLookAtLH(DirectX::XMLoadFloat3(&camera->position), DirectX::XMLoadFloat3(&camera->target), DirectX::XMLoadFloat3(&camera->up));
+        camera->is_view_dirty = false;
+    }
+    
+    DirectX::XMFLOAT4X4 vm;
+    DirectX::XMStoreFloat4x4(&vm, camera->view_matrix);
+    return vm;
+}
+
+DirectX::XMFLOAT4X4 scene::camera_get_projection_matrix(SceneCamera *camera) {
+    assert(camera && "scene::camera_get_view_projection_matrix: Camera pointer cannot be NULL");
+
+    if (camera->is_projection_dirty) {
+        camera->projection_matrix = DirectX::XMMatrixPerspectiveFovLH(
+            DirectX::XMConvertToRadians(camera->base.fov),
+            camera->base.aspect_ratio,
+            camera->base.znear, camera->base.zfar);
+        camera->is_projection_dirty = false;
+    }
+
+    DirectX::XMFLOAT4X4 pm;
+    DirectX::XMStoreFloat4x4(&pm, camera->projection_matrix);
+    return pm;
+}
+
 float scene::camera_get_yaw(Scene *scene, Id scene_cam_id) {
     assert(scene && "scene::camera_get_yaw: Scene pointer cannot be NULL");
     assert(scene_cam_id.id < MAX_SCENE_CAMERAS && "scene::camera_get_yaw: Incorrect Scene Camera Id");
