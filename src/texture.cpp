@@ -5,6 +5,8 @@
 #include "logger.hpp"
 #include "renderer.hpp"
 
+#include <comdef.h>
+
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -187,7 +189,9 @@ TextureId texture::create(uint16_t width,
     // Create the texture
     HRESULT hr = renderer->pDevice->CreateTexture2D(&desc, data_ptr, t->texture.GetAddressOf());
     if (FAILED(hr)) {
-        LOG("texture::load: Failed to create Texture2D on the gpu");
+        _com_error err(hr);
+        LPCTSTR err_msg = err.ErrorMessage();
+        LOG("%s: Failed to create Texture2D. HRESULT: 0x%lX. Message: %s", __func__, hr, err_msg);
         return id::invalid();
     }
 

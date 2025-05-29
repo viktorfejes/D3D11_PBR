@@ -5,9 +5,9 @@
 #include "mesh.hpp"
 #include "scene.hpp"
 #include "shader.hpp"
+#include "shader_system.hpp"
 #include "texture.hpp"
 #include "window.hpp"
-#include "shader_system.hpp"
 
 #include <DirectXMath.h>
 #include <d3d11.h>
@@ -94,29 +94,28 @@ struct Renderer {
     /** @brief Pointer to the current window */
     Window *pWindow = NULL;
 
-    Shader default_shader;
-    Camera *active_camera;
+    ShaderId fullscreen_triangle_vs;
+    PipelineId pbr_shader;
+    PipelineId tonemap_shader;
 
-    // Big Triangle Vertex Shader for anything post or similar
-    Microsoft::WRL::ComPtr<ID3D11VertexShader> triangle_vs_ptr;
+    Camera *active_camera;
 
     // Framebuffer attributes for tonemapping?
     TextureId scene_color;
     TextureId scene_depth;
     Microsoft::WRL::ComPtr<ID3D11Buffer> pSceneVertexBuffer;
-    Shader tonemap_shader;
+    // Shader tonemap_shader;
 
     // Bloom pass members
+    PipelineId bloom_threshold_shader;
+    PipelineId bloom_downsample_shader;
+    PipelineId bloom_upsample_shader;
     TextureId bloom_mips[6];
     uint8_t mip_count;
-
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> threshold_ps_ptr;
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> downsample_ps_ptr;
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> upsample_ps_ptr;
     Microsoft::WRL::ComPtr<ID3D11Buffer> bloom_cb_ptr;
 
     // FXAA pass members
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> fxaa_ps_ptr;
+    PipelineId fxaa_shader;
     Microsoft::WRL::ComPtr<ID3D11Buffer> fxaa_cb_ptr;
     TextureId fxaa_color;
 
@@ -128,6 +127,12 @@ namespace renderer {
 
 bool initialize(Renderer *renderer, Window *window);
 void shutdown(Renderer *renderer);
+
+bool create_default_shaders(Renderer *renderer);
+PipelineId create_pbr_shader_pipeline(Renderer *renderer);
+PipelineId create_tonemap_shader_pipeline(Renderer *renderer);
+bool create_bloom_shader_pipeline(Renderer *renderer, PipelineId *threshold_pipeline, PipelineId *downsample_pipeline, PipelineId *upsample_pipeline);
+PipelineId create_fxaa_pipeline(Renderer *renderer);
 
 void begin_frame(Renderer *renderer);
 void end_frame(Renderer *renderer);

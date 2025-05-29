@@ -90,6 +90,9 @@ ShaderId shader::create_module_from_file(ShaderSystemState *state, ID3D11Device 
                 shader_blob_ptr->GetBufferSize(),
                 nullptr,
                 module->vs.GetAddressOf());
+            
+            // Copy the bytecode -- we'll need it for input layout
+            module->vs_bytecode_ptr = shader_blob_ptr;
         } break;
 
         case SHADER_STAGE_PS: {
@@ -123,10 +126,66 @@ ShaderId shader::create_module_from_file(ShaderSystemState *state, ID3D11Device 
     return module->id;
 }
 
-ShaderId shader::create_module_from_bytecode(ShaderStage stage) {
-    // TODO: Write
-    (void)stage;
-    return id::invalid();
+ShaderId shader::create_module_from_bytecode(ShaderSystemState *state, ID3D11Device *device, ShaderStage stage, const void *bytecode, size_t bytecode_size) {
+    // Linear search for an available module slot
+    ShaderModule *module = nullptr;
+    for (uint8_t i = 0; i < MAX_SHADER_MODULES; ++i) {
+        if (id::is_invalid(state->shader_modules[i].id)) {
+            module = &state->shader_modules[i];
+            module->id.id = i;
+            break;
+        }
+    }
+
+    // When we couldn't find a module slot
+    if (!module) {
+        LOG("%s: Max shader modules reached, adjust max count.", __func__);
+        return id::invalid();
+    }
+
+    HRESULT hr = E_FAIL;
+
+    switch (stage) {
+        case SHADER_STAGE_VS: {
+            hr = device->CreateVertexShader(
+                bytecode,
+                bytecode_size,
+                nullptr,
+                module->vs.GetAddressOf());
+
+            LOG("TODO: Copy the bytecode!");
+        } break;
+
+        case SHADER_STAGE_PS: {
+            hr = device->CreatePixelShader(
+                bytecode, 
+                bytecode_size,
+                nullptr,
+                module->ps.GetAddressOf());
+        } break;
+
+        case SHADER_STAGE_CS: {
+            hr = device->CreateComputeShader(
+                bytecode, 
+                bytecode_size,
+                nullptr,
+                module->cs.GetAddressOf());
+        } break;
+
+        default:
+            LOG("%s: Unknown shader stage", __func__);
+            return id::invalid();
+    }
+
+    // Check if the shader was successfully created or not
+    if (FAILED(hr)) {
+        LOG("%s: Shader creation failed", __func__);
+        return id::invalid();
+    }
+
+    module->stage = stage;
+    return module->id;
+    
 }
 
 PipelineId shader::create_pipeline(ShaderSystemState *state, ID3D11Device *device, ShaderId *shader_modules, uint8_t shader_module_count, const D3D11_INPUT_ELEMENT_DESC *input_desc, uint16_t input_count) {
@@ -215,6 +274,10 @@ void shader::bind_pipeline(ShaderSystemState *state, ID3D11DeviceContext *contex
 }
 
 ShaderModule *shader::get_module(ShaderSystemState *state, ShaderId shader_id) {
+    if (id::is_invalid(shader_id)) {
+        return nullptr;
+    }
+
     if (LIKELY(id::is_fresh(state->shader_modules[shader_id.id].id, shader_id))) {
         return &state->shader_modules[shader_id.id];
     }
@@ -222,6 +285,10 @@ ShaderModule *shader::get_module(ShaderSystemState *state, ShaderId shader_id) {
 }
 
 ShaderPipeline *shader::get_pipeline(ShaderSystemState *state, PipelineId pipeline_id) {
+    if (id::is_invalid(pipeline_id)) {
+        return nullptr;
+    }
+
     if (LIKELY(id::is_fresh(state->shader_pipelines[pipeline_id.id].id, pipeline_id))) {
         return &state->shader_pipelines[pipeline_id.id];
     }

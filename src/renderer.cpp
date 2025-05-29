@@ -227,16 +227,36 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         return false;
     }
 
-    // Create the default shader program
-    D3D11_INPUT_ELEMENT_DESC default_shader_input[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
-    };
+    // Create default shaders
+    if (!create_default_shaders(renderer)) {
+        LOG("%s: Failed to create default shaders", __func__);
+        return false;
+    }
 
-    if (!shader::create(L"assets/default_vs.hlsl", L"assets/default_ps.hlsl", renderer->pDevice.Get(), default_shader_input, ARRAYSIZE(default_shader_input), &renderer->default_shader)) {
-        LOG("Renderer error: Failed to create default shader");
+    // Create shader pipeline for PBR rendering
+    renderer->pbr_shader = create_pbr_shader_pipeline(renderer);
+    if (id::is_invalid(renderer->pbr_shader)) {
+        LOG("%s: Couldn't create PBR shader pipeline", __func__);
+        return false;
+    }
+
+    // Create shader pipeline for tonemapping
+    renderer->tonemap_shader = create_tonemap_shader_pipeline(renderer);
+    if (id::is_invalid(renderer->tonemap_shader)) {
+        LOG("%s: Couldn't create tonemap shader pipeline", __func__);
+        return false;
+    }
+
+    // Create shader pipelines for bloom pass
+    if (!create_bloom_shader_pipeline(renderer, &renderer->bloom_threshold_shader, &renderer->bloom_downsample_shader, &renderer->bloom_upsample_shader)) {
+        LOG("%s: Couldnt create pipeline for the bloom pass", __func__);
+        return false;
+    }
+
+    // Create shader pipeline for FXAA pass
+    renderer->fxaa_shader = create_fxaa_pipeline(renderer);
+    if (id::is_invalid(renderer->fxaa_shader)) {
+        LOG("%s: Couldn't create fxaa shader pipeline", __func__);
         return false;
     }
 
@@ -295,111 +315,6 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         return false;
     }
 
-    // We need a shader for this, as well
-    D3D11_INPUT_ELEMENT_DESC screen_quad_layout[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
-    };
-
-    if (!shader::create(L"assets/tonemap_vs.hlsl", L"assets/tonemap_ps.hlsl", renderer->pDevice.Get(), screen_quad_layout, ARRAYSIZE(screen_quad_layout), &renderer->tonemap_shader)) {
-        LOG("Renderer error: Failed to create tonemap shader");
-        return false;
-    }
-
-    // Create Pixel Shaders for bloom pass
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#ifdef _DEBUG
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-
-    Microsoft::WRL::ComPtr<ID3DBlob> pErrorBlob;
-    Microsoft::WRL::ComPtr<ID3DBlob> pVertexBlob;
-    Microsoft::WRL::ComPtr<ID3DBlob> pPixelBlob;
-    // Compile Pixel Shader from file
-    hr = D3DCompileFromFile(
-        L"assets/bloom_ps.hlsl",
-        NULL,
-        D3D_COMPILE_STANDARD_FILE_INCLUDE,
-        "threshold_main",
-        "ps_5_0",
-        compileFlags,
-        0,
-        pPixelBlob.GetAddressOf(),
-        pErrorBlob.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
-        return false;
-    }
-    hr = renderer->pDevice->CreatePixelShader(
-        pPixelBlob->GetBufferPointer(),
-        pPixelBlob->GetBufferSize(),
-        nullptr,
-        renderer->threshold_ps_ptr.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
-        return false;
-    }
-
-    // Reset blobs
-    pErrorBlob.Reset();
-    pVertexBlob.Reset();
-    pPixelBlob.Reset();
-
-    // Compile Pixel Shader from file
-    hr = D3DCompileFromFile(
-        L"assets/bloom_ps.hlsl",
-        NULL,
-        D3D_COMPILE_STANDARD_FILE_INCLUDE,
-        "downsample_main",
-        "ps_5_0",
-        compileFlags,
-        0,
-        pPixelBlob.GetAddressOf(),
-        pErrorBlob.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
-        return false;
-    }
-    hr = renderer->pDevice->CreatePixelShader(
-        pPixelBlob->GetBufferPointer(),
-        pPixelBlob->GetBufferSize(),
-        nullptr,
-        renderer->downsample_ps_ptr.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
-        return false;
-    }
-
-    // Reset blobs
-    pErrorBlob.Reset();
-    pVertexBlob.Reset();
-    pPixelBlob.Reset();
-
-    // Compile Pixel Shader from file
-    hr = D3DCompileFromFile(
-        L"assets/bloom_ps.hlsl",
-        NULL,
-        D3D_COMPILE_STANDARD_FILE_INCLUDE,
-        "upsample_main",
-        "ps_5_0",
-        compileFlags,
-        0,
-        pPixelBlob.GetAddressOf(),
-        pErrorBlob.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
-        return false;
-    }
-    hr = renderer->pDevice->CreatePixelShader(
-        pPixelBlob->GetBufferPointer(),
-        pPixelBlob->GetBufferSize(),
-        nullptr,
-        renderer->upsample_ps_ptr.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
-        return false;
-    }
-
     // Create textures for bloom pass
     UINT mip_width = pWindow->width / 2;
     UINT mip_height = pWindow->height / 2;
@@ -436,36 +351,6 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         return false;
     }
 
-    // FXAA Pass
-    // Reset blobs
-    pErrorBlob.Reset();
-    pVertexBlob.Reset();
-    pPixelBlob.Reset();
-
-    hr = D3DCompileFromFile(
-        L"assets/fxaa_ps.hlsl",
-        NULL,
-        D3D_COMPILE_STANDARD_FILE_INCLUDE,
-        "main",
-        "ps_5_0",
-        compileFlags,
-        0,
-        pPixelBlob.GetAddressOf(),
-        pErrorBlob.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
-        return false;
-    }
-    hr = renderer->pDevice->CreatePixelShader(
-        pPixelBlob->GetBufferPointer(),
-        pPixelBlob->GetBufferSize(),
-        nullptr,
-        renderer->fxaa_ps_ptr.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
-        return false;
-    }
-
     renderer->fxaa_color = texture::create(
         pWindow->width, pWindow->height,
         DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -490,46 +375,201 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         return false;
     }
 
-    // Create the triangle vertex shader for reuse
-    pErrorBlob.Reset();
-    pVertexBlob.Reset();
-
-    // Compile Pixel Shader from file
-    hr = D3DCompileFromFile(
-        L"assets/triangle_vs.hlsl",
-        NULL,
-        D3D_COMPILE_STANDARD_FILE_INCLUDE,
-        "main",
-        "vs_5_0",
-        compileFlags,
-        0,
-        pVertexBlob.GetAddressOf(),
-        pErrorBlob.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: D3DCompileFromFile failed for Default Triangle Vertex Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
-        return false;
-    }
-    hr = renderer->pDevice->CreateVertexShader(
-        pVertexBlob->GetBufferPointer(),
-        pVertexBlob->GetBufferSize(),
-        nullptr,
-        renderer->triangle_vs_ptr.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: CreateVertexShader failed for Default Triangle Vertex Shader");
-        return false;
-    }
-
     // Bind the sampler
     renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
 
     // Convert 360 HDRi to Cubemap
-    convert_equirectangular_to_cubemap(renderer);
+    // convert_equirectangular_to_cubemap(renderer);
 
     return true;
 }
 
 void renderer::shutdown(Renderer *renderer) {
     (void)renderer;
+}
+
+// TODO: Make these static instead and remove from header
+bool renderer::create_default_shaders(Renderer *renderer) {
+    // Create default fullscreen triangle shader module
+    renderer->fullscreen_triangle_vs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/triangle.vs.hlsl",
+        SHADER_STAGE_VS,
+        "main");
+
+    if (id::is_invalid(renderer->fullscreen_triangle_vs)) {
+        LOG("%s: Failed to create shader module for fullscreen triangle", __func__);
+        return false;
+    }
+
+    return true;
+}
+
+PipelineId renderer::create_pbr_shader_pipeline(Renderer *renderer) {
+    ShaderId pbr_vs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"assets/default_vs.hlsl",
+        SHADER_STAGE_VS,
+        "main");
+    ShaderId pbr_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"assets/default_ps.hlsl",
+        SHADER_STAGE_PS,
+        "main");
+
+    // Define the pbr input layout
+    D3D11_INPUT_ELEMENT_DESC pbr_input_desc[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+
+    // Modules in the PBR pipeline
+    ShaderId pbr_modules[] = {pbr_vs, pbr_ps};
+
+    PipelineId pbr_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        pbr_modules,
+        ARRAYSIZE(pbr_modules),
+        pbr_input_desc,
+        ARRAYSIZE(pbr_input_desc));
+
+    return pbr_pipeline;
+}
+
+PipelineId renderer::create_tonemap_shader_pipeline(Renderer *renderer) {
+    ShaderId tonemap_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/tonemap.ps.hlsl",
+        SHADER_STAGE_PS,
+        "main");
+
+    ShaderId tonemap_modules[] = {renderer->fullscreen_triangle_vs, tonemap_ps};
+
+    PipelineId tonemap_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        tonemap_modules,
+        ARRAYSIZE(tonemap_modules),
+        nullptr, 0);
+
+    return tonemap_pipeline;
+}
+
+bool renderer::create_bloom_shader_pipeline(Renderer *renderer, PipelineId *threshold_pipeline, PipelineId *downsample_pipeline, PipelineId *upsample_pipeline) {
+    // Create the threshold module
+    ShaderId threshold_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/bloom.ps.hlsl",
+        SHADER_STAGE_PS,
+        "threshold_main");
+
+    if (id::is_invalid(threshold_ps)) {
+        LOG("%s: Couldn't create shader module for bloom threshold", __func__);
+        return false;
+    }
+
+    // Create the downsample pixel shader module
+    ShaderId downsample_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/bloom.ps.hlsl",
+        SHADER_STAGE_PS,
+        "downsample_main");
+
+    if (id::is_invalid(downsample_ps)) {
+        LOG("%s: Couldn't create shader module for bloom downsample", __func__);
+        return false;
+    }
+
+    // Create the upsample pixel shader module
+    ShaderId upsample_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/bloom.ps.hlsl",
+        SHADER_STAGE_PS,
+        "upsample_main");
+
+    if (id::is_invalid(upsample_ps)) {
+        LOG("%s: Couldn't create shader module for bloom upsample", __func__);
+        return false;
+    }
+
+    // This holds the vs and ps modules for bloom
+    ShaderId bloom_modules[2];
+
+    // Threshold pipeline
+    bloom_modules[0] = renderer->fullscreen_triangle_vs;
+    bloom_modules[1] = threshold_ps;
+
+    *threshold_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        bloom_modules,
+        ARRAYSIZE(bloom_modules),
+        nullptr, 0);
+
+    if (id::is_invalid(*threshold_pipeline)) {
+        LOG("%s: Couldn't create shader pipeline for bloom's threshold stage", __func__);
+        return false;
+    }
+
+    // Downsample pipeline
+    bloom_modules[1] = downsample_ps;
+    *downsample_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        bloom_modules,
+        ARRAYSIZE(bloom_modules),
+        nullptr, 0);
+
+    if (id::is_invalid(*downsample_pipeline)) {
+        LOG("%s: Couldn't create shader pipeline for bloom's downsample stage", __func__);
+        return false;
+    }
+
+    // Downsample pipeline
+    bloom_modules[1] = upsample_ps;
+    *upsample_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        bloom_modules,
+        ARRAYSIZE(bloom_modules),
+        nullptr, 0);
+
+    if (id::is_invalid(*upsample_pipeline)) {
+        LOG("%s: Couldn't create shader pipeline for bloom's upsample stage", __func__);
+        return false;
+    }
+
+    return true;
+}
+
+PipelineId renderer::create_fxaa_pipeline(Renderer *renderer) {
+    ShaderId fxaa_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/fxaa.ps.hlsl",
+        SHADER_STAGE_PS,
+        "main");
+
+    ShaderId fxaa_modules[] = {renderer->fullscreen_triangle_vs, fxaa_ps};
+
+    PipelineId fxaa_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        fxaa_modules,
+        ARRAYSIZE(fxaa_modules),
+        nullptr, 0);
+
+    return fxaa_pipeline;
 }
 
 void renderer::begin_frame(Renderer *renderer) {
@@ -596,8 +636,9 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
     renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
     renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
 
-    // For now just globally bind our single shader
-    shader::bind(&renderer->default_shader, renderer->pContext.Get());
+    // Bind the PBR shader
+    ShaderPipeline *pbr_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->pbr_shader);
+    shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), pbr_pipeline);
 
     // Loop through our meshes from our selected scene
     MaterialId current_material_bound = id::invalid();
@@ -684,10 +725,13 @@ void renderer::render_bloom_pass(Renderer *renderer) {
     memcpy(mapped.pData, &bloom_constants, sizeof(BloomConstants));
     context->Unmap(renderer->bloom_cb_ptr.Get(), 0);
 
+    // Fetch the threshold pipeline from id
+    ShaderPipeline *threshold_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->bloom_threshold_shader);
+    shader::bind_pipeline(&renderer->shader_system, context, threshold_pipeline);
+
     Texture *bloom_mip_1 = &renderer->textures[renderer->bloom_mips[0].id];
     context->ClearRenderTargetView(bloom_mip_1->rtv[0].Get(), clear_color);
     context->OMSetRenderTargets(1, bloom_mip_1->rtv[0].GetAddressOf(), nullptr);
-    context->PSSetShader(renderer->threshold_ps_ptr.Get(), nullptr, 0);
     context->PSSetShaderResources(0, 1, &scene_srv);
     context->PSSetConstantBuffers(0, 1, renderer->bloom_cb_ptr.GetAddressOf());
 
@@ -702,14 +746,12 @@ void renderer::render_bloom_pass(Renderer *renderer) {
     UINT offset = 0;
     UINT stride = sizeof(FSVertex);
     renderer->pContext->IASetVertexBuffers(0, 1, renderer->pSceneVertexBuffer.GetAddressOf(), &stride, &offset);
-    // HACK: I'm digging into the currently inflexible shader struct to find the
-    // vertex shader and I'm binding it here manually
-    context->IASetInputLayout(renderer->tonemap_shader.pInputLayout.Get());
-    context->VSSetShader(renderer->tonemap_shader.pVertexShader.Get(), nullptr, 0);
+
     context->Draw(3, 0);
 
     // 2. Downsample chain
-    context->PSSetShader(renderer->downsample_ps_ptr.Get(), nullptr, 0);
+    ShaderPipeline *downsample_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->bloom_downsample_shader);
+    shader::bind_pipeline(&renderer->shader_system, context, downsample_pipeline);
     for (int i = 1; i < renderer->mip_count; ++i) {
         Texture *bloom_mip = &renderer->textures[renderer->bloom_mips[i].id];
 
@@ -733,7 +775,8 @@ void renderer::render_bloom_pass(Renderer *renderer) {
 
     // 3. Upsample chain -- with additive blend state
     context->OMSetBlendState(renderer->pAdditiveBS.Get(), nullptr, 0xFFFFFFFF);
-    context->PSSetShader(renderer->upsample_ps_ptr.Get(), nullptr, 0);
+    ShaderPipeline *upsample_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->bloom_upsample_shader);
+    shader::bind_pipeline(&renderer->shader_system, context, upsample_pipeline);
     for (int i = renderer->mip_count - 2; i >= 0; --i) {
         Texture *bloom_mip = &renderer->textures[renderer->bloom_mips[i].id];
 
@@ -787,7 +830,9 @@ void renderer::render_fxaa_pass(Renderer *renderer) {
 
     context->ClearRenderTargetView(fxaa_texture->rtv[0].Get(), clear_color);
     context->OMSetRenderTargets(1, fxaa_texture->rtv[0].GetAddressOf(), nullptr);
-    context->PSSetShader(renderer->fxaa_ps_ptr.Get(), nullptr, 0);
+
+    ShaderPipeline *fxaa_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->fxaa_shader);
+    shader::bind_pipeline(&renderer->shader_system, context, fxaa_pipeline);
 
     ID3D11ShaderResourceView *srvs[] = {scene_srv};
     renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -805,17 +850,14 @@ void renderer::render_fxaa_pass(Renderer *renderer) {
     UINT offset = 0;
     UINT stride = sizeof(FSVertex);
     renderer->pContext->IASetVertexBuffers(0, 1, renderer->pSceneVertexBuffer.GetAddressOf(), &stride, &offset);
-    // HACK: I'm digging into the currently inflexible shader struct to find the
-    // vertex shader and I'm binding it here manually
-    context->IASetInputLayout(renderer->tonemap_shader.pInputLayout.Get());
-    context->VSSetShader(renderer->tonemap_shader.pVertexShader.Get(), nullptr, 0);
 
     context->Draw(3, 0);
 }
 
 void renderer::render_tonemap_pass(Renderer *renderer) {
     // Bind the shader for the tonemap pass
-    shader::bind(&renderer->tonemap_shader, renderer->pContext.Get());
+    ShaderPipeline *tonemap_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->tonemap_shader);
+    shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), tonemap_pipeline);
 
     // Bind the vertex buffer
     UINT offset = 0;
@@ -878,41 +920,6 @@ bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
         nullptr, 0,
         6, 1, true);
 
-    // Compile and bind the appropriate shaders
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
-#ifdef _DEBUG
-    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-
-    Microsoft::WRL::ComPtr<ID3D11PixelShader> pixel_shader_ptr;
-    Microsoft::WRL::ComPtr<ID3DBlob> pErrorBlob;
-    Microsoft::WRL::ComPtr<ID3DBlob> pPixelBlob;
-    // Compile Pixel Shader from file
-    HRESULT hr = D3DCompileFromFile(
-        L"assets/equirect_to_cube.hlsl",
-        NULL,
-        D3D_COMPILE_STANDARD_FILE_INCLUDE,
-        "ps_main",
-        "ps_5_0",
-        compileFlags,
-        0,
-        pPixelBlob.GetAddressOf(),
-        pErrorBlob.GetAddressOf());
-    if (FAILED(hr)) {
-        // TODO: these logs need to be updated at one point!
-        LOG("ShaderProgram: D3DCompileFromFile failed for Bloom Threshold Pixel Shader. Error: %s", (char *)pErrorBlob->GetBufferPointer());
-        return false;
-    }
-    hr = renderer->pDevice->CreatePixelShader(
-        pPixelBlob->GetBufferPointer(),
-        pPixelBlob->GetBufferSize(),
-        nullptr,
-        pixel_shader_ptr.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("ShaderProgram: CreatePixelShader failed for Bloom Threshold Pixel Shader");
-        return false;
-    }
-
     Microsoft::WRL::ComPtr<ID3D11Buffer> face_cb_ptr;
 
     // Create Constant Buffer for conversion
@@ -922,15 +929,39 @@ bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
     cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
-    hr = renderer->pDevice->CreateBuffer(&cb_desc, nullptr, face_cb_ptr.GetAddressOf());
+    HRESULT hr = renderer->pDevice->CreateBuffer(&cb_desc, nullptr, face_cb_ptr.GetAddressOf());
     if (FAILED(hr)) {
         LOG("Renderer error: Failed to create constant buffer for bloom pass");
         return false;
     }
 
+    // Create the pipeline for conversion
+    ShaderId conversion_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/equirect_to_cube.ps.hlsl",
+        SHADER_STAGE_PS,
+        "main");
+    if (id::is_invalid(conversion_ps)) {
+        LOG("%s: Couldn't create pixel shader module for Equirectangular to Cubemap conversion", __func__);
+        return false;
+    }
+
+    ShaderId conversion_modules[] = {renderer->fullscreen_triangle_vs, conversion_ps};
+    PipelineId conversion_shader = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        conversion_modules,
+        ARRAYSIZE(conversion_modules),
+        nullptr, 0);
+    if (id::is_invalid(conversion_shader)) {
+        LOG("%s: Couldn't create shader pipeline for Equirectangular to Cubemap conversion", __func__);
+        return false;
+    }
+
     // Bind shaders
-    renderer->pContext->VSSetShader(renderer->triangle_vs_ptr.Get(), nullptr, 0);
-    renderer->pContext->PSSetShader(pixel_shader_ptr.Get(), nullptr, 0);
+    ShaderPipeline *conversion_pipeline = shader::get_pipeline(&renderer->shader_system, conversion_shader);
+    shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), conversion_pipeline);
 
     const float clear_color[4] = {0, 0, 0, 1};
 

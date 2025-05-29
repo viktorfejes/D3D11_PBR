@@ -46,7 +46,7 @@ namespace shader {
 bool system_initialize(ShaderSystemState *state);
 
 ShaderId create_module_from_file(ShaderSystemState *state, ID3D11Device *device, const wchar_t *path, ShaderStage stage, const char *entry_point);
-ShaderId create_module_from_bytecode(ShaderStage stage);
+ShaderId create_module_from_bytecode(ShaderSystemState *state, ID3D11Device *device, ShaderStage stage, const void *bytecode, size_t bytecode_size);
 PipelineId create_pipeline(ShaderSystemState *state, ID3D11Device *device, ShaderId *shader_modules, uint8_t shader_module_count, const D3D11_INPUT_ELEMENT_DESC *input_desc, uint16_t input_count);
 
 void bind_pipeline(ShaderSystemState *state, ID3D11DeviceContext *context, ShaderPipeline *pipeline);
