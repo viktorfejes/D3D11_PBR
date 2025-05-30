@@ -32,6 +32,7 @@ compile_commands.json
 doc.cap
 *.spp
 *.blend
+*.hdr
 
 ### Folders ###
 .xmake/

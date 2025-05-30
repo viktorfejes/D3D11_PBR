@@ -7,5 +7,6 @@ struct VSOutput {
 };
 
 float4 main(VSOutput input) : SV_Target {
-    return skybox_tex.Sample(samp, normalize(input.texCoord));
+//  return skybox_tex.Sample(samp, normalize(input.texCoord));
+    return float4(0, 0, 0, 1.0f);
 }

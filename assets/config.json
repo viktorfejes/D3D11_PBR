@@ -6,7 +6,7 @@
                     "mesh_id": 0,
                     "material_id": 0,
                     "position": [0.0, 0.0, 0.0],
-                    "rotation": [0.0, 0.0, 0.0],
+                    "rotation": [0.0, -90.0, 0.0],
                     "scale": [1.0, 1.0, 1.0]
                 }
             ],

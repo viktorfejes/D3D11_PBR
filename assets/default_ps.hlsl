@@ -1,10 +1,14 @@
+// IBL Related Textures
 TextureCube irradianceMap : register(t0);
 TextureCube prefilterMap : register(t1);
-Texture2D albedoTex : register(t2);
-Texture2D metallicTex : register(t3);
-Texture2D roughnessTex : register(t4);
-Texture2D normalTex : register(t5);
-Texture2D emissionTex : register(t6);
+Texture2D brdf_lut : register(t2);
+
+// Material properties
+Texture2D albedoTex : register(t3);
+Texture2D metallicTex : register(t4);
+Texture2D roughnessTex : register(t5);
+Texture2D normalTex : register(t6);
+Texture2D emissionTex : register(t7);
 SamplerState samp : register(s0);
 
 cbuffer PerMaterialConstants : register(b0) {
@@ -109,7 +113,7 @@ float4 main(PS_Input input) : SV_TARGET {
     // Light direction is in World Space
     float3 lightDirection = float3(-0.577f, -0.577f, 0.577f);
     float3 lightColor = float3(1.0f, 1.0f, 1.0f);
-    float lightIntensity = 1.0f;
+    float lightIntensity = 0.0f;
 
     // World Normal normalized
     float3 N_tangent_raw = normalTex.Sample(samp, input.TexCoord).xyz;
@@ -167,8 +171,10 @@ float4 main(PS_Input input) : SV_TARGET {
     float mip_level = roughnessSample * max_reflection_LOD;
     float3 prefiltered_color = prefilterMap.SampleLevel(samp, R, mip_level).rgb;
 
-    // Fresnel for IBL (for energy conservation)
-    float3 F_ibl = FresnelSchlickRoughness(NdotV, F0, roughnessSample);
+    // Fresnel for IBL
+    float2 brdf_sample = brdf_lut.Sample(samp, float2(NdotV, roughnessSample)).rg;
+//  float3 F_ibl = FresnelSchlickRoughness(NdotV, F0, roughnessSample);
+    float3 F_ibl = F0 * brdf_sample.x + brdf_sample.y;
 
     // Energy conservation
     float3 kS = F_ibl;

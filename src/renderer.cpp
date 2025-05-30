@@ -439,6 +439,9 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     // Create the IBL Prefilter map for Specular
     generate_IBL_prefilter(renderer, 5);
 
+    // Generate the BRDF LUT
+    generate_BRDF_LUT(renderer);
+
     return true;
 }
 
@@ -763,8 +766,10 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
     Texture *irradiance_tex = &renderer->textures[renderer->irradiance_cubemap.id];
     // Grab the prefilter map
     Texture *prefilter_tex = &renderer->textures[renderer->prefilter_map.id];
-    ID3D11ShaderResourceView *env_srvs[] = {irradiance_tex->srv.Get(), prefilter_tex->srv.Get()};
-    if (prefilter_tex && irradiance_tex) {
+    // Grab the BRDF LUT
+    Texture *brdf_lut_tex = &renderer->textures[renderer->brdf_lut.id];
+    ID3D11ShaderResourceView *env_srvs[] = {irradiance_tex->srv.Get(), prefilter_tex->srv.Get(), brdf_lut_tex->srv.Get()};
+    if (prefilter_tex && irradiance_tex && brdf_lut_tex) {
         renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(env_srvs), env_srvs);
     }
 
@@ -806,7 +811,7 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
             Texture *normal_tex = &renderer->textures[mat->normal_map.id];
             Texture *emission_tex = &renderer->textures[mat->emission_map.id];
             ID3D11ShaderResourceView *srvs[] = {albedo_tex->srv.Get(), metallic_tex->srv.Get(), roughness_tex->srv.Get(), normal_tex->srv.Get(), emission_tex->srv.Get()};
-            renderer->pContext->PSSetShaderResources(2, ARRAYSIZE(srvs), srvs);
+            renderer->pContext->PSSetShaderResources(ARRAYSIZE(env_srvs), ARRAYSIZE(srvs), srvs);
 
             current_material_bound = mat->id;
         }
@@ -1080,7 +1085,8 @@ void renderer::clear_render_target(Renderer *renderer, ID3D11RenderTargetView *r
 }
 
 bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
-    TextureId hdri = texture::load_hdr("assets/photo_studio_loft_hall_4k.hdr");
+    // TextureId hdri = texture::load_hdr("assets/photo_studio_loft_hall_4k.hdr");
+    TextureId hdri = texture::load_hdr("assets/metal_studio_23.hdr");
     Texture *hdri_tex = &renderer->textures[hdri.id];
 
     renderer->cubemap_id = texture::create(
@@ -1353,6 +1359,62 @@ bool renderer::generate_IBL_prefilter(Renderer *renderer, uint32_t total_mips) {
     // Clear all bindings
     ID3D11ShaderResourceView *nullsrv = nullptr;
     renderer->pContext->CSSetShaderResources(0, 1, &nullsrv);
+    shader::unbind_pipeline(renderer->pContext.Get());
+
+    return true;
+}
+
+bool renderer::generate_BRDF_LUT(Renderer *renderer) {
+    ShaderId brdf_lut_cs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/brdf_lut.cs.hlsl",
+        SHADER_STAGE_CS,
+        "main");
+
+    if (id::is_invalid(brdf_lut_cs)) {
+        LOG("%s: Failed to create compute shader for BRDF LUT", __func__);
+        return false;
+    }
+
+    ShaderId brdf_lut_modules[] = {brdf_lut_cs};
+    PipelineId brdf_lut_shader = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        brdf_lut_modules,
+        ARRAYSIZE(brdf_lut_modules),
+        nullptr, 0);
+
+    if (id::is_invalid(brdf_lut_shader)) {
+        LOG("%s: Couldn't create shader pipeline for BRDF LUT", __func__);
+        return false;
+    }
+
+    renderer->brdf_lut = texture::create(
+        512, 512,
+        DXGI_FORMAT_R16G16_FLOAT,
+        D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+        true,
+        nullptr, 0,
+        1, 1,
+        false);
+    
+    // Bind shaders
+    ShaderPipeline *brdf_lut_pipeline = shader::get_pipeline(&renderer->shader_system, brdf_lut_shader);
+    shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), brdf_lut_pipeline);
+
+    // Bind input environment map
+    Texture *brdf_tex = &renderer->textures[renderer->brdf_lut.id];
+    renderer->pContext->CSSetUnorderedAccessViews(0, 1, brdf_tex->uav[0].GetAddressOf(), nullptr);
+
+    // Dispatch compute shader (512x512 with 8x8 thread groups)
+    uint32_t dispatch_x = (512 + 7) / 8;
+    uint32_t dispatch_y = (512 + 7) / 8;
+    renderer->pContext->Dispatch(dispatch_x, dispatch_y, 1);
+
+    // Cleanup
+    ID3D11UnorderedAccessView *nulluav = nullptr;
+    renderer->pContext->CSSetUnorderedAccessViews(0, 1, &nulluav, nullptr);
     shader::unbind_pipeline(renderer->pContext.Get());
 
     return true;
