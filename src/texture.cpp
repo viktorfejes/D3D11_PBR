@@ -223,6 +223,35 @@ TextureId texture::create(uint16_t width,
         }
     }
 
+    if (bind_flags & D3D11_BIND_UNORDERED_ACCESS) {
+        for (uint32_t mip = 0; mip < mip_levels; ++mip) {
+            D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+            uav_desc.Format = format;
+
+            if (is_cubemap) {
+                uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+                uav_desc.Texture2DArray.MipSlice = mip;
+                uav_desc.Texture2DArray.FirstArraySlice = 0;
+                uav_desc.Texture2DArray.ArraySize = 6;
+            } else if (array_size > 1) {
+                uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+                uav_desc.Texture2DArray.MipSlice = mip;
+                uav_desc.Texture2DArray.FirstArraySlice = 0;
+                uav_desc.Texture2DArray.ArraySize = array_size;
+            } else {
+                uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+                uav_desc.Texture2D.MipSlice = mip;
+            }
+
+            // Create the UAV
+            hr = renderer->pDevice->CreateUnorderedAccessView((ID3D11Resource *)t->texture.Get(), &uav_desc, t->uav[mip].GetAddressOf());
+            if (FAILED(hr)) {
+                LOG("%s: Failed to create Unordered Access View for texture.", __func__);
+                return id::invalid();
+            }
+        }
+    }
+
     if (bind_flags & D3D11_BIND_RENDER_TARGET) {
         for (uint32_t i = 0; i < array_size; ++i) {
             D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};

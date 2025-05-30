@@ -79,8 +79,8 @@ float3 irradiance(float3 N) {
 
 float4 main(float4 pos : SV_POSITION) : SV_Target {
     // Get viewport dimensions from system values if available
-    // Otherwise, you'll need to pass this as a constant buffer
-    float2 uv = pos.xy / 32.0; // You mentioned this is hardcoded
+    // Otherwise, I'll need to pass this as a constant buffer
+    float2 uv = pos.xy / 32.0;
     float3 dir = getDirection(faceIndex, uv);
     return float4(irradiance(dir), 1.0);
 }

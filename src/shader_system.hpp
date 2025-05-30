@@ -50,6 +50,7 @@ ShaderId create_module_from_bytecode(ShaderSystemState *state, ID3D11Device *dev
 PipelineId create_pipeline(ShaderSystemState *state, ID3D11Device *device, ShaderId *shader_modules, uint8_t shader_module_count, const D3D11_INPUT_ELEMENT_DESC *input_desc, uint16_t input_count);
 
 void bind_pipeline(ShaderSystemState *state, ID3D11DeviceContext *context, ShaderPipeline *pipeline);
+void unbind_pipeline(ID3D11DeviceContext *context);
 
 ShaderModule *get_module(ShaderSystemState *state, ShaderId shader_id);
 ShaderPipeline *get_pipeline(ShaderSystemState *state, PipelineId pipeline_id);

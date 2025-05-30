@@ -1,9 +1,10 @@
 TextureCube irradianceMap : register(t0);
-Texture2D albedoTex : register(t1);
-Texture2D metallicTex : register(t2);
-Texture2D roughnessTex : register(t3);
-Texture2D normalTex : register(t4);
-Texture2D emissionTex : register(t5);
+TextureCube prefilterMap : register(t1);
+Texture2D albedoTex : register(t2);
+Texture2D metallicTex : register(t3);
+Texture2D roughnessTex : register(t4);
+Texture2D normalTex : register(t5);
+Texture2D emissionTex : register(t6);
 SamplerState samp : register(s0);
 
 cbuffer PerMaterialConstants : register(b0) {
@@ -28,6 +29,10 @@ struct PS_Input {
 
 float3 FresnelSchlick(float cosTheta, float3 F0) {
     return F0 + (1.0f - F0) * pow(1.0f - cosTheta, 5.0f);
+}
+
+float3 FresnelSchlickRoughness(float cosTheta, float3 F0, float roughness) {
+    return F0 + (max(float3(1.0 - roughness, 1.0 - roughness, 1.0 - roughness), F0) - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
 float DistributionGGX(float3 N, float3 H, float roughness) {
@@ -100,42 +105,6 @@ float3 F_Sheen(float LdotH, float3 sheenColor) {
 }
 
 float4 main(PS_Input input) : SV_TARGET {
- // float3 albedoSample = albedo * albedoTex.Sample(samp, input.TexCoord).rgb;
-
- // float3 N_tangent_raw = normalTex.Sample(samp, input.TexCoord).xyz;
- // float3 N = normalize(mul(N_tangent_raw * 2.0f - 1.0f, input.TBN));
- // // N.y *= -1.0f; -- This is in case we need to flip the normals
-
- // float3 V = normalize(input.cameraPosition - input.WorldPos);
- // float3 L = normalize(float3(0.577f, 0.577f, -0.577f));
- // float3 H = normalize(V + L);
-
- // float3 lightColor = float3(1.0f, 1.0f, 1.0f);
- // float lightIntensity = 1.0f;
-
- // float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedoSample, metallic);
-
- // float roughnessSample = roughness * roughnessTex.Sample(samp, input.TexCoord).r;
-
- // // BRDF components
- // float NDF = DistributionGGX(N, H, roughnessSample);
- // float G = GeometrySmith(N, V, L, roughnessSample);
- // float3 F = FresnelSchlick(saturate(dot(H, V)), F0);
-
- // float3 numerator = NDF * G * F;
- // float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.001;
- // float3 specular = numerator / denominator;
-
- // float3 kS = F;
- // float3 kD = 1.0 - kS;
- // kD *= 1.0 - metallic;
-
- // float NdotL = max(dot(N, L), 0.0);
-
- // float3 color = (kD * albedoSample / PI + specular) * lightColor * lightIntensity * NdotL;
-
- // return float4(GammaCorrect(color), 1.0f);
-
     // Directional light data (hardcoded for now)
     // Light direction is in World Space
     float3 lightDirection = float3(-0.577f, -0.577f, 0.577f);
@@ -153,49 +122,70 @@ float4 main(PS_Input input) : SV_TARGET {
     float3 V = normalize(input.cameraPosition - input.WorldPos);
     // Half-vector between light and view
     float3 H = normalize(V + L);
+    // Reflection vector for IBL
+    float3 R = reflect(-V, N);
 
     float NdotV = abs(dot(N, V)) + 1e-5;
     float NdotL = saturate(dot(N, L));
     float NdotH = saturate(dot(N, H));
     float LdotH = saturate(dot(L, H));
 
-    // Sample the diffuse based on the input albedo color and the input albedo texture
-    // When a texture is present albedo allows for tinting of the texture
+    // Sample material properties
     float3 diffuseSample = albedo * albedoTex.Sample(samp, input.TexCoord).rgb;
-    // The diffuse color -> will have to modulate with metallic later
     float3 diffuseColor = diffuseSample;
-
-    // The roughness value from the sample
     float roughnessSample = roughness * roughnessTex.Sample(samp, input.TexCoord).r;
-
     float3 metallicSample = metallic * metallicTex.Sample(samp, input.TexCoord).rgb;
-
-    // Emission combined with the emission texture
     float3 emissionSample = emission_color * emissionTex.Sample(samp, input.TexCoord).rgb;
 
-    // Irradiance Map for diffuse reflections
-    float3 irradiance = irradianceMap.Sample(samp, input.NormalWS).rgb;
+    // Base reflectance (F0)
+    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), diffuseColor, metallicSample);
 
-    // Diffuse BRDF
+    // =======================================================
+    // DIRECT LIGHTING
+    // =======================================================
     float3 sheenColor = float3(0.0f, 0.0f, 0.0f);
-    // TODO: I'm getting greyscale at grazing angles and I'm wondering if
-    // that's normal, or it's caused by some mistake like the sheen?
     float3 Fd = diffuseColor * Fd_Lambert() + F_Sheen(LdotH, sheenColor);
 
-    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), diffuseColor, metallic);
-
     float D = D_GGX(NdotH, roughnessSample);
-    float3 F = F_Schlick(LdotH, F0, float3(1.0f, 1.0f, 1.0f));
+    float3 F_direct = F_Schlick(LdotH, F0, float3(1.0f, 1.0f, 1.0f));
     float G = G_SmithGGXCorrelated(NdotV, NdotL, roughnessSample);
-
-    // Specular BRDF
-    float3 Fr = (D * G) * F; 
-
-    float3 emission = emissionSample;
-    float3 BRDF = (1.0 - metallicSample) * Fd + Fr;
+    
+    float3 Fr = (D * G) * F_direct; 
+    float3 BRDF_direct = (1.0 - metallicSample) * Fd + Fr;
     float3 Li = lightColor * lightIntensity;
+    float3 direct_lighting = BRDF_direct * Li * NdotL;
 
-    float3 Lo = emission + (BRDF * Li * NdotL);
+    // =======================================================
+    // INDIRECT LIGHTING
+    // =======================================================
+    // Diffuse IBL
+    float3 irradiance = irradianceMap.Sample(samp, input.NormalWS).rgb;
+
+    // Specular IBL
+    // TODO: This is hardcoded for now -- move it into CB 
+    float max_reflection_LOD = 4.0;
+    float mip_level = roughnessSample * max_reflection_LOD;
+    float3 prefiltered_color = prefilterMap.SampleLevel(samp, R, mip_level).rgb;
+
+    // Fresnel for IBL (for energy conservation)
+    float3 F_ibl = FresnelSchlickRoughness(NdotV, F0, roughnessSample);
+
+    // Energy conservation
+    float3 kS = F_ibl;
+    float3 kD = float3(1.0, 1.0, 1.0) - kS;
+    kD *= 1.0 - metallicSample;
+
+    // Combine diffuse and specular IBL
+    float3 diffuseIBL = kD * diffuseColor * irradiance;
+
+    // Simple specular IBL (without BRDF LUT for now)
+    float3 specularIBL = prefiltered_color * F_ibl;
+
+    float3 indirect_lighting = diffuseIBL + specularIBL;
+//  indirect_lighting = float3(0, 0, 0);
+
+    // Final output
+    float3 Lo = emissionSample + direct_lighting + indirect_lighting;
 
     return float4(Lo, 1.0f);
 }

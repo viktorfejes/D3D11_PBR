@@ -133,6 +133,7 @@ struct Renderer {
     // TEMP: Cubemap texture id
     TextureId cubemap_id;
     TextureId irradiance_cubemap;
+    TextureId prefilter_map;
     Microsoft::WRL::ComPtr<ID3D11Buffer> face_cb_ptr;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> skybox_cb_ptr;
@@ -166,6 +167,7 @@ void clear_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11
 
 bool convert_equirectangular_to_cubemap(Renderer *renderer);
 bool generate_irradiance_cubemap(Renderer *renderer);
+bool generate_IBL_prefilter(Renderer *renderer, uint32_t total_mips);
 
 void on_window_resize(Renderer *renderer, uint16_t width, uint16_t height);
 

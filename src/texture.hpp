@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 using TextureId = Id;
+#define MAX_MIP_LEVELS 16
 
 struct Texture {
     TextureId id;
@@ -16,6 +17,7 @@ struct Texture {
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv[6];
     Microsoft::WRL::ComPtr<ID3D11DepthStencilView> dsv;
+    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> uav[MAX_MIP_LEVELS];
 };
 
 namespace texture {

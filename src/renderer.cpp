@@ -150,9 +150,9 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     // Create default sampler(s)
     D3D11_SAMPLER_DESC samp_desc = {};
     samp_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-    samp_desc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
-    samp_desc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
-    samp_desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    samp_desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samp_desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    samp_desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
     samp_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
     samp_desc.MaxLOD = D3D11_FLOAT32_MAX;
     hr = renderer->pDevice->CreateSamplerState(&samp_desc, renderer->sampler.GetAddressOf());
@@ -435,6 +435,9 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
 
     // Generate Irradiance map from the cubemap
     generate_irradiance_cubemap(renderer);
+
+    // Create the IBL Prefilter map for Specular
+    generate_IBL_prefilter(renderer, 5);
 
     return true;
 }
@@ -758,8 +761,11 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
 
     // Grab the irradiance map
     Texture *irradiance_tex = &renderer->textures[renderer->irradiance_cubemap.id];
-    if (irradiance_tex) {
-        renderer->pContext->PSSetShaderResources(0, 1, irradiance_tex->srv.GetAddressOf());
+    // Grab the prefilter map
+    Texture *prefilter_tex = &renderer->textures[renderer->prefilter_map.id];
+    ID3D11ShaderResourceView *env_srvs[] = {irradiance_tex->srv.Get(), prefilter_tex->srv.Get()};
+    if (prefilter_tex && irradiance_tex) {
+        renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(env_srvs), env_srvs);
     }
 
     // Loop through our meshes from our selected scene
@@ -800,7 +806,7 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
             Texture *normal_tex = &renderer->textures[mat->normal_map.id];
             Texture *emission_tex = &renderer->textures[mat->emission_map.id];
             ID3D11ShaderResourceView *srvs[] = {albedo_tex->srv.Get(), metallic_tex->srv.Get(), roughness_tex->srv.Get(), normal_tex->srv.Get(), emission_tex->srv.Get()};
-            renderer->pContext->PSSetShaderResources(1, ARRAYSIZE(srvs), srvs);
+            renderer->pContext->PSSetShaderResources(2, ARRAYSIZE(srvs), srvs);
 
             current_material_bound = mat->id;
         }
@@ -1055,7 +1061,7 @@ void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
     memcpy(mapped.pData, &skybox_cb, sizeof(CBSkybox));
     context->Unmap(renderer->skybox_cb_ptr.Get(), 0);
     context->VSSetConstantBuffers(0, 1, renderer->skybox_cb_ptr.GetAddressOf());
-    
+
     // Draw cube hardcoded into vertex shader
     context->Draw(36, 0);
 }
@@ -1235,6 +1241,119 @@ bool renderer::generate_irradiance_cubemap(Renderer *renderer) {
         // Draw
         renderer->pContext->Draw(3, 0);
     }
+
+    return true;
+}
+
+bool renderer::generate_IBL_prefilter(Renderer *renderer, uint32_t total_mips) {
+    ShaderId prefilter_cs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/ibl_prefilter.cs.hlsl",
+        SHADER_STAGE_CS,
+        "main");
+
+    if (id::is_invalid(prefilter_cs)) {
+        LOG("%s: Failed to create compute shader for IBL prefilter", __func__);
+        return false;
+    }
+
+    ShaderId prefilter_modules[] = {prefilter_cs};
+    PipelineId prefilter_shader = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        prefilter_modules,
+        ARRAYSIZE(prefilter_modules),
+        nullptr, 0);
+
+    if (id::is_invalid(prefilter_shader)) {
+        LOG("%s: Couldn't create shader pipeline for IBL prefilter", __func__);
+        return false;
+    }
+
+    renderer->prefilter_map = texture::create(
+        256, 256,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+        true,
+        nullptr, 0,
+        6, total_mips,
+        true);
+
+    // Create constant buffer
+    struct CBIBLPrefilter {
+        uint32_t current_mip_level;
+        uint32_t total_mip_levels;
+        float roughness;
+        uint32_t num_samples;
+    };
+
+    Microsoft::WRL::ComPtr<ID3D11Buffer> iblpre_cb_ptr;
+
+    D3D11_BUFFER_DESC prefilter_cb_desc = {};
+    prefilter_cb_desc.ByteWidth = sizeof(CBIBLPrefilter);
+    prefilter_cb_desc.Usage = D3D11_USAGE_DYNAMIC;
+    prefilter_cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    prefilter_cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    HRESULT hr = renderer->pDevice->CreateBuffer(&prefilter_cb_desc, nullptr, iblpre_cb_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("%s: Failed to create constant buffer for IBL prefilter", __func__);
+        return false;
+    }
+
+    // Bind shaders
+    ShaderPipeline *prefilter_pipeline = shader::get_pipeline(&renderer->shader_system, prefilter_shader);
+    shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), prefilter_pipeline);
+
+    // Bind input environment map
+    Texture *env_map = &renderer->textures[renderer->cubemap_id.id];
+    renderer->pContext->CSSetShaderResources(0, 1, env_map->srv.GetAddressOf());
+
+    // Fetch the output texture
+    Texture *out_tex = &renderer->textures[renderer->prefilter_map.id];
+
+    // UAV nullptr for reuse
+    ID3D11UnorderedAccessView *nulluav = nullptr;
+
+    // Process each mip level
+    for (uint32_t mip = 0; mip < total_mips; ++mip) {
+        // Calculate roughness for the mip level
+        float roughness = mip / static_cast<float>(total_mips - 1);
+
+        // Update constant buffer
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        renderer->pContext->Map(iblpre_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        CBIBLPrefilter *constants = (CBIBLPrefilter *)mapped.pData;
+        constants->current_mip_level = mip;
+        constants->total_mip_levels = total_mips;
+        constants->roughness = roughness;
+        constants->num_samples = (mip == 0) ? 1 : 1024; // Mirror reflection only needs 1 sample
+        renderer->pContext->Unmap(iblpre_cb_ptr.Get(), 0);
+
+        // Set the cb on the shader
+        renderer->pContext->CSSetConstantBuffers(0, 1, iblpre_cb_ptr.GetAddressOf());
+
+        // Bind output UAV for the mip
+        renderer->pContext->CSSetUnorderedAccessViews(0, 1, out_tex->uav[mip].GetAddressOf(), nullptr);
+
+        // Calculate dispatch size
+        uint32_t mip_size = MAX(1u, 256u >> mip);
+        uint32_t dispatch_x = (mip_size + 7) / 8;
+        uint32_t dispatch_y = (mip_size + 7) / 8;
+        uint32_t dispatch_z = 6; // 6 faces for cubemap
+
+        // Dispatch compute shader
+        renderer->pContext->Dispatch(dispatch_x, dispatch_y, dispatch_z);
+
+        // Clear UAV binding
+        renderer->pContext->CSSetUnorderedAccessViews(0, 1, &nulluav, nullptr);
+    }
+
+    // Clear all bindings
+    ID3D11ShaderResourceView *nullsrv = nullptr;
+    renderer->pContext->CSSetShaderResources(0, 1, &nullsrv);
+    shader::unbind_pipeline(renderer->pContext.Get());
 
     return true;
 }

@@ -273,6 +273,14 @@ void shader::bind_pipeline(ShaderSystemState *state, ID3D11DeviceContext *contex
     context->IASetInputLayout(pipeline->input_layout_ptr.Get());
 }
 
+void shader::unbind_pipeline(ID3D11DeviceContext *context) {
+    context->VSSetShader(nullptr, nullptr, 0);
+    context->PSSetShader(nullptr, nullptr, 0);
+    context->CSSetShader(nullptr, nullptr, 0);
+
+    context->IASetInputLayout(nullptr);
+}
+
 ShaderModule *shader::get_module(ShaderSystemState *state, ShaderId shader_id) {
     if (id::is_invalid(shader_id)) {
         return nullptr;
