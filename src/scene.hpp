@@ -51,7 +51,7 @@ struct Scene {
 namespace scene {
 
 bool initialize(Scene *out_scene);
-SceneId add_mesh(Scene *scene, Id mesh_id, Id material_id, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 rotation);
+SceneId add_mesh(Scene *scene, Id mesh_id, Id material_id, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 rotation, DirectX::XMFLOAT3 scale);
 SceneId add_camera(Scene *scene, float fov, float znear, float zfar, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 target);
 
 DirectX::XMFLOAT3 mesh_get_rotation(Scene *scene, Id scene_mesh_id);

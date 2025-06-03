@@ -264,7 +264,7 @@ bool application::deserialize_config() {
         cJSON_ArrayForEach(mi, mesh_instances) {
             cJSON *m_pos = cJSON_GetObjectItem(mi, "position");
             cJSON *m_rot = cJSON_GetObjectItem(mi, "rotation");
-            // cJSON *m_scl = cJSON_GetObjectItem(mi, "scale");
+            cJSON *m_scl = cJSON_GetObjectItem(mi, "scale");
 
             DirectX::XMFLOAT3 mi_position(
                 cJSON_GetArrayItem(m_pos, 0)->valuedouble,
@@ -276,11 +276,16 @@ bool application::deserialize_config() {
                 cJSON_GetArrayItem(m_rot, 1)->valuedouble,
                 cJSON_GetArrayItem(m_rot, 2)->valuedouble);
 
+            DirectX::XMFLOAT3 mi_scale(
+                cJSON_GetArrayItem(m_scl, 0)->valuedouble,
+                cJSON_GetArrayItem(m_scl, 1)->valuedouble,
+                cJSON_GetArrayItem(m_scl, 2)->valuedouble);
+
             scene::add_mesh(
                 &pState->scenes[new_scene.id],
                 idmap::get(&mesh_map, cJSON_GetObjectItem(mi, "mesh_id")->valueint),
                 idmap::get(&mat_map, cJSON_GetObjectItem(mi, "material_id")->valueint),
-                mi_position, mi_rotation);
+                mi_position, mi_rotation, mi_scale);
         }
     }
 

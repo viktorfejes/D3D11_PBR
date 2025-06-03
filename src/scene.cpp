@@ -19,7 +19,7 @@ bool scene::initialize(Scene *out_scene) {
     return true;
 }
 
-Id scene::add_mesh(Scene *scene, Id mesh_id, Id material_id, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 rotation) {
+Id scene::add_mesh(Scene *scene, Id mesh_id, Id material_id, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 rotation, DirectX::XMFLOAT3 scale) {
     assert(scene && "scene::add_mesh: scene pointer cannot be NULL");
 
     // Find an empty slot in scene with linear search
@@ -43,7 +43,7 @@ Id scene::add_mesh(Scene *scene, Id mesh_id, Id material_id, DirectX::XMFLOAT3 p
     sm->material_id = material_id;
     sm->position = position;
     sm->rotation = rotation;
-    sm->scale = {1.0f, 1.0f, 1.0f};
+    sm->scale = scale;
     sm->is_dirty = true;
 
     // Compute the world matrix so we have it in cache based on defaults
