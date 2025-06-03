@@ -1398,7 +1398,7 @@ bool renderer::generate_BRDF_LUT(Renderer *renderer) {
         nullptr, 0,
         1, 1,
         false);
-    
+
     // Bind shaders
     ShaderPipeline *brdf_lut_pipeline = shader::get_pipeline(&renderer->shader_system, brdf_lut_shader);
     shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), brdf_lut_pipeline);
@@ -1502,6 +1502,22 @@ void renderer::on_window_resize(Renderer *renderer, uint16_t width, uint16_t hei
     if (FAILED(hr)) {
         LOG("Renderer error: Failed to create depth stencil view");
         return;
+    }
+
+    // Resize scene color and depth buffers
+    texture::resize(renderer->scene_color, width, height);
+    texture::resize(renderer->scene_depth, width, height);
+
+    // Resize FXAA pass
+    texture::resize(renderer->fxaa_color, width, height);
+
+    // Resize bloom mips
+    uint32_t bmw = width;
+    uint32_t bmh = height;
+    for (uint8_t i = 0; i < renderer->mip_count; ++i) {
+        bmw = MAX(bmw / 2, 1);
+        bmh = MAX(bmh / 2, 1);
+        texture::resize(renderer->bloom_mips[i], bmw, bmh);
     }
 
     // Set the viewport

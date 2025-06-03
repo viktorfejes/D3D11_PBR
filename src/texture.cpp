@@ -10,8 +10,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-TextureId texture::load(const char *filename, bool is_srgb) {
+static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_size, DXGI_FORMAT format, uint32_t bind_flags, bool is_cubemap, bool generate_srv, const void *data, uint32_t row_pitch);
 
+TextureId texture::load(const char *filename, bool is_srgb) {
     // stbi_set_flip_vertically_on_load(1);
 
     int h, w, c;
@@ -59,7 +60,6 @@ TextureId texture::load_hdr(const char *filename) {
     stbi_image_free(hdr_data);
 
     return new_tex;
-    
 }
 
 TextureId texture::load_from_data(uint8_t *image_data, uint16_t width, uint16_t height) {
@@ -158,15 +158,77 @@ TextureId texture::create(uint16_t width,
         return id::invalid();
     }
 
-    // Fill out the out texture's width and height members
-    // using the returned stb_image values
+    if (!create_texture_internal(renderer->pDevice.Get(), t,
+                                 width, height,
+                                 mip_levels, array_size,
+                                 format,
+                                 bind_flags,
+                                 is_cubemap, generate_srv,
+                                 initial_data, row_pitch)) {
+        id::invalidate(&t->id);
+        return id::invalid();
+    }
+
+    // Set the fields now that we know it's a valid texture
+    t->width = width;
+    t->height = height;
+    t->format = format;
+    t->mip_levels = mip_levels;
+    t->array_size = array_size;
+    t->is_cubemap = is_cubemap;
+    t->bind_flags = bind_flags;
+    t->has_srv = generate_srv;
+
+    return t->id;
+}
+
+// TODO: For now, resize only concerns the size of the texture, nothing else...
+bool texture::resize(TextureId id, uint16_t width, uint16_t height) {
+    Renderer *renderer = application::get_renderer();
+
+    Texture *t = get(id);
+    if (!t) {
+        return false;
+    }
+
+    // Recreate the texture. Since I'm using ComPtr's I don't need to release
+    // it before recreating it -- the smart pointer will take care of it
+    if (!create_texture_internal(renderer->pDevice.Get(), t,
+                                 width, height,
+                                 t->mip_levels, t->array_size,
+                                 t->format,
+                                 t->bind_flags,
+                                 t->is_cubemap, t->has_srv,
+                                 NULL, 0)) {
+        return false;
+    }
+
+    // Update the width and height
     t->width = width;
     t->height = height;
 
+    return true;
+}
+
+Texture *texture::get(TextureId id) {
+    Renderer *renderer = application::get_renderer();
+    assert(renderer && "Renderer should be able to be retreived from application layer");
+
+    if (id::is_invalid(id)) {
+        return nullptr;
+    }
+
+    Texture *t = &renderer->textures[id.id];
+    assert(t && "Texture should be present in renderer's storage");
+
+    return t;
+}
+
+static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_size, DXGI_FORMAT format, uint32_t bind_flags, bool is_cubemap, bool generate_srv, const void *data, uint32_t row_pitch) {
     // Upload to GPU straight away
     D3D11_TEXTURE2D_DESC desc = {};
-    desc.Width = t->width;
-    desc.Height = t->height;
+    desc.Width = width;
+    desc.Height = height;
     desc.MipLevels = mip_levels;
     desc.ArraySize = array_size;
     desc.Format = format;
@@ -180,19 +242,19 @@ TextureId texture::create(uint16_t width,
     // Initial data
     D3D11_SUBRESOURCE_DATA init_data = {};
     D3D11_SUBRESOURCE_DATA *data_ptr = nullptr;
-    if (initial_data && row_pitch > 0) {
-        init_data.pSysMem = initial_data;
+    if (data && row_pitch > 0) {
+        init_data.pSysMem = data;
         init_data.SysMemPitch = row_pitch;
         data_ptr = &init_data;
     }
 
     // Create the texture
-    HRESULT hr = renderer->pDevice->CreateTexture2D(&desc, data_ptr, t->texture.GetAddressOf());
+    HRESULT hr = device->CreateTexture2D(&desc, data_ptr, texture->texture.GetAddressOf());
     if (FAILED(hr)) {
         _com_error err(hr);
         LPCTSTR err_msg = err.ErrorMessage();
         LOG("%s: Failed to create Texture2D. HRESULT: 0x%lX. Message: %s", __func__, hr, err_msg);
-        return id::invalid();
+        return false;
     }
 
     if (generate_srv && (bind_flags & D3D11_BIND_SHADER_RESOURCE)) {
@@ -216,10 +278,10 @@ TextureId texture::create(uint16_t width,
         }
 
         // Create the SRV
-        hr = renderer->pDevice->CreateShaderResourceView((ID3D11Resource *)t->texture.Get(), &srv_desc, t->srv.GetAddressOf());
+        hr = device->CreateShaderResourceView((ID3D11Resource *)texture->texture.Get(), &srv_desc, texture->srv.GetAddressOf());
         if (FAILED(hr)) {
             LOG("texture::load: Failed to create Shader Resource View for texture.");
-            return id::invalid();
+            return false;
         }
     }
 
@@ -244,10 +306,10 @@ TextureId texture::create(uint16_t width,
             }
 
             // Create the UAV
-            hr = renderer->pDevice->CreateUnorderedAccessView((ID3D11Resource *)t->texture.Get(), &uav_desc, t->uav[mip].GetAddressOf());
+            hr = device->CreateUnorderedAccessView((ID3D11Resource *)texture->texture.Get(), &uav_desc, texture->uav[mip].GetAddressOf());
             if (FAILED(hr)) {
                 LOG("%s: Failed to create Unordered Access View for texture.", __func__);
-                return id::invalid();
+                return false;
             }
         }
     }
@@ -268,10 +330,10 @@ TextureId texture::create(uint16_t width,
             }
 
             // Create the RTV
-            hr = renderer->pDevice->CreateRenderTargetView((ID3D11Resource *)t->texture.Get(), &rtv_desc, t->rtv[i].GetAddressOf());
+            hr = device->CreateRenderTargetView((ID3D11Resource *)texture->texture.Get(), &rtv_desc, texture->rtv[i].GetAddressOf());
             if (FAILED(hr)) {
                 LOG("texture::load: Failed to create Render Target View for texture.");
-                return id::invalid();
+                return false;
             }
         }
     }
@@ -282,18 +344,12 @@ TextureId texture::create(uint16_t width,
         dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
 
         // Create the DSV
-        hr = renderer->pDevice->CreateDepthStencilView((ID3D11Resource *)t->texture.Get(), &dsv_desc, t->dsv.GetAddressOf());
+        hr = device->CreateDepthStencilView((ID3D11Resource *)texture->texture.Get(), &dsv_desc, texture->dsv.GetAddressOf());
         if (FAILED(hr)) {
             LOG("texture::load: Failed to create Depth Stencil View for texture.");
-            return id::invalid();
+            return false;
         }
     }
 
-    return t->id;
-}
-
-Texture *texture::get(TextureId id) {
-    // TODO: Which would require me to create a texture system...
-    (void)id;
-    return nullptr;
+    return true;
 }

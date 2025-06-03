@@ -13,6 +13,12 @@ struct Texture {
     TextureId id;
     int16_t width;
     int16_t height;
+    DXGI_FORMAT format;
+    uint32_t bind_flags;
+    uint32_t mip_levels;
+    uint32_t array_size;
+    bool is_cubemap;
+    bool has_srv;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv[6];
@@ -35,6 +41,7 @@ TextureId create(uint16_t width,
                  uint32_t array_size,
                  uint32_t mip_levels,
                  bool is_cubemap);
+bool resize(TextureId id, uint16_t width, uint16_t height);
 Texture *get(TextureId id);
 
 } // namespace texture

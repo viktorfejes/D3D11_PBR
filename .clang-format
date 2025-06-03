@@ -6,3 +6,5 @@ PointerAlignment: Right
 ReflowComments: true
 IndentCaseLabels: true
 InsertNewlineAtEOF: true
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: WithoutElse
