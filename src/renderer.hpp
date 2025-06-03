@@ -109,13 +109,9 @@ struct Renderer {
     PipelineId pbr_shader;
     PipelineId tonemap_shader;
 
-    Camera *active_camera;
-
     // Framebuffer attributes for tonemapping?
     TextureId scene_color;
     TextureId scene_depth;
-    Microsoft::WRL::ComPtr<ID3D11Buffer> pSceneVertexBuffer;
-    // Shader tonemap_shader;
 
     // Bloom pass members
     PipelineId bloom_threshold_shader;

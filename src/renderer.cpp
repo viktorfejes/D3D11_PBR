@@ -338,35 +338,6 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         nullptr, 0,
         1, 1, false);
 
-    // Definition of a triangle for color buffer rendering.
-    // Triangle extend beyond clip space bounds so it will
-    // result in a rectangle viewable area.
-    // NOTE: This could be moved to the shader hardcoded, if wanted
-    FSVertex vertices[3] = {
-        {{-1.0f, -1.0f}, {0.0f, 1.0f}},
-        {{-1.0f, 3.0f}, {0.0f, -1.0f}},
-        {{3.0f, -1.0f}, {2.0f, 1.0f}},
-    };
-
-    D3D11_BUFFER_DESC FSVertDesc = {};
-    FSVertDesc.ByteWidth = UINT(sizeof(FSVertex) * 3);
-    FSVertDesc.Usage = D3D11_USAGE_DEFAULT;
-    FSVertDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    FSVertDesc.CPUAccessFlags = 0;
-
-    D3D11_SUBRESOURCE_DATA initData = {};
-    initData.pSysMem = vertices;
-
-    hr = renderer->pDevice->CreateBuffer(
-        &FSVertDesc,
-        &initData,
-        renderer->pSceneVertexBuffer.GetAddressOf());
-
-    if (FAILED(hr)) {
-        LOG("renderer::initialize: Vertex buffer couldn't be created for fullscreen triangle.");
-        return false;
-    }
-
     // Create textures for bloom pass
     UINT mip_width = pWindow->width / 2;
     UINT mip_height = pWindow->height / 2;
@@ -882,11 +853,6 @@ void renderer::render_bloom_pass(Renderer *renderer) {
     viewport.MaxDepth = 1.0f;
     context->RSSetViewports(1, &viewport);
 
-    // Bind the vertex buffer
-    UINT offset = 0;
-    UINT stride = sizeof(FSVertex);
-    renderer->pContext->IASetVertexBuffers(0, 1, renderer->pSceneVertexBuffer.GetAddressOf(), &stride, &offset);
-
     context->Draw(3, 0);
 
     // 2. Downsample chain
@@ -986,11 +952,6 @@ void renderer::render_fxaa_pass(Renderer *renderer) {
     viewport.MaxDepth = 1.0f;
     context->RSSetViewports(1, &viewport);
 
-    // Bind the vertex buffer
-    UINT offset = 0;
-    UINT stride = sizeof(FSVertex);
-    renderer->pContext->IASetVertexBuffers(0, 1, renderer->pSceneVertexBuffer.GetAddressOf(), &stride, &offset);
-
     context->Draw(3, 0);
 }
 
@@ -999,18 +960,12 @@ void renderer::render_tonemap_pass(Renderer *renderer) {
     ShaderPipeline *tonemap_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->tonemap_shader);
     shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), tonemap_pipeline);
 
-    // Bind the vertex buffer
-    UINT offset = 0;
-    UINT stride = sizeof(FSVertex);
-    renderer->pContext->IASetVertexBuffers(0, 1, renderer->pSceneVertexBuffer.GetAddressOf(), &stride, &offset);
-
     // TODO: We are not setting the primitive topology anywhere visible, only in mesh::draw
     // which is fine for now as D3D11 is a statemachine so we are keeping that state
     // but we should probably set it somewhere explicitly and clearly.
     // context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Bind previous render target as texture
-    // Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
     Texture *scene_color_tex = &renderer->textures[renderer->fxaa_color.id];
     Texture *bloom_tex = &renderer->textures[renderer->bloom_mips[0].id];
     ID3D11ShaderResourceView *srvs[] = {scene_color_tex->srv.Get(), bloom_tex->srv.Get()};
