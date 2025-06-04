@@ -20,6 +20,9 @@
 #define MAX(a, b) (a > b ? a : b)
 #endif
 
+// Static functions
+static bool create_default_shaders(Renderer *renderer);
+
 bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     // Store pointer to window
     if (!pWindow) {
@@ -418,24 +421,6 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
 
 void renderer::shutdown(Renderer *renderer) {
     (void)renderer;
-}
-
-// TODO: Make these static instead and remove from header
-bool renderer::create_default_shaders(Renderer *renderer) {
-    // Create default fullscreen triangle shader module
-    renderer->fullscreen_triangle_vs = shader::create_module_from_file(
-        &renderer->shader_system,
-        renderer->pDevice.Get(),
-        L"src/shaders/triangle.vs.hlsl",
-        SHADER_STAGE_VS,
-        "main");
-
-    if (id::is_invalid(renderer->fullscreen_triangle_vs)) {
-        LOG("%s: Failed to create shader module for fullscreen triangle", __func__);
-        return false;
-    }
-
-    return true;
 }
 
 PipelineId renderer::create_pbr_shader_pipeline(Renderer *renderer) {
@@ -1040,8 +1025,8 @@ void renderer::clear_render_target(Renderer *renderer, ID3D11RenderTargetView *r
 }
 
 bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
-    // TextureId hdri = texture::load_hdr("assets/photo_studio_loft_hall_4k.hdr");
-    TextureId hdri = texture::load_hdr("assets/metal_studio_23.hdr");
+    TextureId hdri = texture::load_hdr("assets/photo_studio_loft_hall_4k.hdr");
+    // TextureId hdri = texture::load_hdr("assets/metal_studio_23.hdr");
     Texture *hdri_tex = &renderer->textures[hdri.id];
 
     renderer->cubemap_id = texture::create(
@@ -1493,3 +1478,21 @@ void renderer::on_window_resize(Renderer *renderer, uint16_t width, uint16_t hei
 ID3D11Device *renderer::get_device(Renderer *renderer) {
     return renderer->pDevice.Get();
 }
+
+static bool create_default_shaders(Renderer *renderer) {
+    // Create default fullscreen triangle shader module
+    renderer->fullscreen_triangle_vs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/triangle.vs.hlsl",
+        SHADER_STAGE_VS,
+        "main");
+
+    if (id::is_invalid(renderer->fullscreen_triangle_vs)) {
+        LOG("%s: Failed to create shader module for fullscreen triangle", __func__);
+        return false;
+    }
+
+    return true;
+}
+

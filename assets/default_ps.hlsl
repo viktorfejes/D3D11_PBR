@@ -187,7 +187,10 @@ float4 main(PS_Input input) : SV_TARGET {
     // Simple specular IBL (without BRDF LUT for now)
     float3 specularIBL = prefiltered_color * F_ibl;
 
-    float3 indirect_lighting = diffuseIBL + specularIBL;
+    // TODO: Hard-coded exposure here (could be a CB parameter)
+    // Defined in photographic EV where 0.0 is no change, 1.0 doubles positively, -1.0 double negatively
+    float ibl_exposureEV = -1;
+    float3 indirect_lighting = pow(2.0, ibl_exposureEV) * (diffuseIBL + specularIBL);
 //  indirect_lighting = float3(0, 0, 0);
 
     // Final output

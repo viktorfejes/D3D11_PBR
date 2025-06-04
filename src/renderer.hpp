@@ -1,6 +1,5 @@
 #pragma once
 
-#include "camera.hpp"
 #include "material.hpp"
 #include "mesh.hpp"
 #include "scene.hpp"
@@ -142,7 +141,6 @@ namespace renderer {
 bool initialize(Renderer *renderer, Window *window);
 void shutdown(Renderer *renderer);
 
-bool create_default_shaders(Renderer *renderer);
 PipelineId create_pbr_shader_pipeline(Renderer *renderer);
 PipelineId create_tonemap_shader_pipeline(Renderer *renderer);
 bool create_bloom_shader_pipeline(Renderer *renderer, PipelineId *threshold_pipeline, PipelineId *downsample_pipeline, PipelineId *upsample_pipeline);
