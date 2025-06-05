@@ -120,6 +120,7 @@ MeshId mesh::load(const char *filename) {
             vertices[i].tangent.x = vtan[0];
             vertices[i].tangent.y = vtan[1];
             vertices[i].tangent.z = vtan[2];
+            vertices[i].tangent.w = vtan[3];
         }
 
         vertices[i].position.x = vp[0];
@@ -340,6 +341,16 @@ void mesh::destroy(MeshId mesh_id) {
         id::invalidate(&renderer->meshes[mesh_id.id].id);
         delete &renderer->meshes[mesh_id.id];
     }
+}
+
+Mesh *mesh::get(Renderer *renderer, MeshId mesh_id) {
+    if (id::is_valid(mesh_id) && mesh_id.id < MAX_MESHES) {
+        Mesh *m = &renderer->meshes[mesh_id.id];
+        if (id::is_fresh(m->id, mesh_id)) {
+            return m;
+        }
+    }
+    return nullptr;
 }
 
 void mesh::draw(ID3D11DeviceContext *context, Mesh *mesh) {

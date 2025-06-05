@@ -1,6 +1,8 @@
 #include "scene.hpp"
 
 #include "logger.hpp"
+#include "renderer.hpp"
+
 #include <DirectXMath.h>
 #include <cassert>
 
@@ -113,7 +115,25 @@ SceneId scene::add_camera(Scene *scene, float fov, float znear, float zfar, Dire
     return cam->id;
 }
 
-DirectX::XMFLOAT3 scene::mesh_get_rotation(Scene *scene, Id scene_mesh_id) {
+void scene::bind_mesh_instance(Renderer *renderer, Scene *scene, Id mesh_instance_id, uint8_t start_slot) {
+    D3D11_MAPPED_SUBRESOURCE map;
+
+    // Update per object constant buffer
+    HRESULT hr = renderer->pContext->Map(renderer->pCBPerObject.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
+    if (FAILED(hr)) {
+        LOG("%s: Failed to map per object constant buffer", __func__);
+        return;
+    }
+
+    // Update the per object buffer on gpu
+    CBPerObject *perObjectPtr = (CBPerObject *)map.pData;
+    DirectX::XMStoreFloat4x4(&perObjectPtr->worldMatrix, scene::mesh_get_world_matrix(scene, mesh_instance_id));
+
+    renderer->pContext->Unmap(renderer->pCBPerObject.Get(), 0);
+    renderer->pContext->VSSetConstantBuffers((UINT)start_slot, 1, renderer->pCBPerObject.GetAddressOf());
+}
+
+DirectX::XMFLOAT3 scene::mesh_get_rotation(Scene *scene, SceneId scene_mesh_id) {
     assert(scene && "scene::mesh_get_rotation: Scene pointer cannot be NULL");
 
     // Fetch the right mesh based on whether it is stale or not
@@ -125,7 +145,7 @@ DirectX::XMFLOAT3 scene::mesh_get_rotation(Scene *scene, Id scene_mesh_id) {
     return DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f);
 }
 
-DirectX::XMMATRIX scene::mesh_get_world_matrix(Scene *scene, Id scene_mesh_id) {
+DirectX::XMMATRIX scene::mesh_get_world_matrix(Scene *scene, SceneId scene_mesh_id) {
     assert(scene && "scene::mesh_get_world_matrix: Scene pointer cannot be NULL");
 
     // Fetch the right mesh based on whether it is stale or not
@@ -191,7 +211,7 @@ DirectX::XMFLOAT4X4 scene::camera_get_view_matrix(SceneCamera *camera) {
         camera->view_matrix = DirectX::XMMatrixLookAtLH(DirectX::XMLoadFloat3(&camera->position), DirectX::XMLoadFloat3(&camera->target), DirectX::XMLoadFloat3(&camera->up));
         camera->is_view_dirty = false;
     }
-    
+
     DirectX::XMFLOAT4X4 vm;
     DirectX::XMStoreFloat4x4(&vm, camera->view_matrix);
     return vm;

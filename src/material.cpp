@@ -3,9 +3,12 @@
 #include "application.hpp"
 #include "id.hpp"
 #include "logger.hpp"
+#include "mesh.hpp"
 #include "renderer.hpp"
+#include "texture.hpp"
+#include <cassert>
 
-MaterialId material::create(DirectX::XMFLOAT3 albedo, Id albedo_map, float metallic, Id metallic_map, float roughness, Id roughness_map, Id normal_map, DirectX::XMFLOAT3 emission_color, Id emission_map) {
+MaterialId material::create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, float metallic_value, Id metallic_texture, float roughness_value, Id roughness_texture, Id normal_texture, DirectX::XMFLOAT3 emission_color, Id emission_texture) {
     // Materials are kept in the renderer so fetching that here
     Renderer *renderer = application::get_renderer();
 
@@ -26,20 +29,63 @@ MaterialId material::create(DirectX::XMFLOAT3 albedo, Id albedo_map, float metal
         return id::invalid();
     }
 
-    // Set up the material
-    mat->albedo = id::is_invalid(albedo_map) ? albedo : DirectX::XMFLOAT3(1.0f, 1.0f, 1.0f);
-    mat->albedo_map = albedo_map;
-    mat->metallic = id::is_invalid(metallic_map) ? metallic : 1.0f;
-    mat->metallic_map = metallic_map;
-    mat->rougness = id::is_invalid(roughness_map) ? roughness : 1.0f;
-    mat->roughness_map = roughness_map;
-    mat->normal_map = normal_map;
+    // Material values
+    mat->albedo_color = albedo_color;
+    mat->metallic_value = metallic_value;
+    mat->roughness_value = roughness_value;
     mat->emission_color = emission_color;
-    mat->emission_map = emission_map;
+
+    // Material textures
+    mat->albedo_texture = albedo_texture;
+    mat->metallic_texture = metallic_texture;
+    mat->roughness_texture = roughness_texture;
+    mat->normal_texture = normal_texture;
+    mat->emission_texture = emission_texture;
 
     return mat->id;
 }
 
-void material::bind(Material *material) {
-    (void)material;
+Material *material::get(Renderer *renderer, MaterialId material_id) {
+    if (id::is_valid(material_id)) {
+        Material *m = &renderer->materials[material_id.id];
+        if (id::is_fresh(m->id, material_id)) {
+            return m;
+        }
+    }
+
+    return nullptr;
+}
+
+void material::bind(Renderer *renderer, Material *material, uint8_t start_slot) {
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    HRESULT hr = renderer->pContext->Map(renderer->pCBPerMaterial.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    if (FAILED(hr)) {
+        LOG("%s: Failed to map per material constant buffer", __func__);
+        return;
+    }
+
+    CBPerMaterial *cb_ptr = (CBPerMaterial *)mappedResource.pData;
+    cb_ptr->albedo_color = material->albedo_color;
+    cb_ptr->emission_color = material->emission_color;
+    cb_ptr->metallic_value = material->metallic_value;
+    cb_ptr->roughness_value = material->roughness_value;
+
+    renderer->pContext->Unmap(renderer->pCBPerMaterial.Get(), 0);
+    renderer->pContext->PSSetConstantBuffers(0, 1, renderer->pCBPerMaterial.GetAddressOf());
+
+    // Look up the texture based on the id
+    Texture *albedo_tex = texture::get(renderer, material->albedo_texture);
+    Texture *metallic_tex = texture::get(renderer, material->metallic_texture);
+    Texture *roughness_tex = texture::get(renderer, material->roughness_texture);
+    Texture *normal_tex = texture::get(renderer, material->normal_texture);
+    Texture *emission_tex = texture::get(renderer, material->emission_texture);
+
+    ID3D11ShaderResourceView *srvs[] = {
+        albedo_tex->srv.Get(),
+        metallic_tex->srv.Get(),
+        roughness_tex->srv.Get(),
+        normal_tex->srv.Get(),
+        emission_tex->srv.Get(),
+    };
+    renderer->pContext->PSSetShaderResources((UINT)start_slot, ARRAYSIZE(srvs), srvs);
 }

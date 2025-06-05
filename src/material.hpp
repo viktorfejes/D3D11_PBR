@@ -3,6 +3,8 @@
 #include "id.hpp"
 #include <DirectXMath.h>
 
+struct Renderer;
+
 using MaterialId = Id;
 
 enum MRAO_Bits {
@@ -14,25 +16,26 @@ enum MRAO_Bits {
 struct Material {
     MaterialId id;
 
-    DirectX::XMFLOAT3 albedo;
-    Id albedo_map;
-    float metallic;
-    // TODO: Merge metallic, roughness, and ao into a single map
-    // uint8_t mrao_flags;
-    // Id mrao_map;
-    Id metallic_map;
-    float rougness;
-    Id roughness_map;
-    Id normal_map;
+    DirectX::XMFLOAT3 albedo_color;
+    DirectX::XMFLOAT3 emission_color;
+    float metallic_value;
+    float roughness_value;
 
-    // Controlling emission by potentially having an 8-bit emission_map texture
+    Id albedo_texture;
+    Id metallic_texture;
+    Id roughness_texture;
+    Id normal_texture;
+
+    // Controlling emission by potentially having an 8-bit emission_texture texture
     // the emission_color can take it into HDR territory by going over 1.0 on
     // any component, serving as a tint and multiplier
-    DirectX::XMFLOAT3 emission_color;
-    Id emission_map;
+    Id emission_texture;
 };
 
 namespace material {
-MaterialId create(DirectX::XMFLOAT3 albedo, Id albedo_map, float metallic, Id metallic_map, float roughness, Id roughness_map, Id normal_map, DirectX::XMFLOAT3 emission_color, Id emission_map);
-void bind(Material *material);
+
+MaterialId create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, float metallic_value, Id metallic_texture, float roughness_value, Id roughness_texture, Id normal_texture, DirectX::XMFLOAT3 emission_color, Id emission_texture);
+Material *get(Renderer *renderer, MaterialId material_id);
+void bind(Renderer *renderer, Material *material, uint8_t start_slot);
+
 } // namespace material

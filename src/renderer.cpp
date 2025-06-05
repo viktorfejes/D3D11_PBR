@@ -315,6 +315,13 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         return false;
     }
 
+    // Create pipeline for G-Buffer
+    renderer->gbuffer_pipeline = create_gbuffer_pipeline(renderer);
+    if (id::is_invalid(renderer->gbuffer_pipeline)) {
+        LOG("%s: Couldn't create G-buffer shader pipeline", __func__);
+        return false;
+    }
+
     // Set the viewport
     D3D11_VIEWPORT vp;
     vp.Width = (FLOAT)pWindow->width;
@@ -645,6 +652,48 @@ PipelineId renderer::create_skybox_pipeline(Renderer *renderer) {
     return skybox_pipeline;
 }
 
+PipelineId renderer::create_gbuffer_pipeline(Renderer *renderer) {
+    ShaderId gbuffer_vs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/gbuffer.vs.hlsl",
+        SHADER_STAGE_VS,
+        "main");
+
+    if (id::is_invalid(gbuffer_vs)) {
+        LOG("%s: Couldn't create shader module for G-buffer vertex shader", __func__);
+        return id::invalid();
+    }
+
+    ShaderId gbuffer_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/gbuffer.ps.hlsl",
+        SHADER_STAGE_PS,
+        "main");
+
+    if (id::is_invalid(gbuffer_ps)) {
+        LOG("%s: Couldn't create shader module for G-buffer pixel shader", __func__);
+        return id::invalid();
+    }
+
+    ShaderId gbuffer_modules[] = {gbuffer_vs, gbuffer_ps};
+
+    PipelineId gbuffer_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        gbuffer_modules,
+        ARRAYSIZE(gbuffer_modules),
+        nullptr, 0);
+
+    if (id::is_invalid(gbuffer_pipeline)) {
+        LOG("%s: Couldn't create shader pipeline for G-buffer", __func__);
+        return id::invalid();
+    }
+
+    return gbuffer_pipeline;
+}
+
 void renderer::begin_frame(Renderer *renderer) {
     ID3D11DeviceContext *context = renderer->pContext.Get();
 
@@ -740,35 +789,81 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
         // If the material id is different from the currently bound
         // bind the new one.
         if (mesh->material_id.id != current_material_bound.id) {
-            Material *mat = &renderer->materials[mesh->material_id.id];
-            if (id::is_stale(mat->id, mesh->material_id)) {
-                LOG("Material id: %d, Mesh's material id: %d", mat->id.id, mesh->material_id.id);
-                LOG("Renderer error: Material corruption");
-                return;
+            // Get the material
+            Material *mat = material::get(renderer, mesh->material_id);
+            if (!mat) {
+                LOG("%s: Warning! Material couldn't be fetched", __func__);
+                continue;
             }
 
-            hr = renderer->pContext->Map(renderer->pCBPerMaterial.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
-            if (FAILED(hr)) {
-                LOG("Renderer error: Failed to map per material constant buffer");
-                return;
+            // Bind the material's values and textures
+            material::bind(renderer, mat, ARRAYSIZE(env_srvs));
+
+            // Update the currently bound material
+            current_material_bound = mat->id;
+        }
+
+        // Lookup the mesh gpu resource through the mesh_id
+        Mesh *gpu_mesh = mesh::get(renderer, mesh->mesh_id);
+        if (!gpu_mesh) {
+            continue;
+        }
+
+        // Bind mesh instance
+        scene::bind_mesh_instance(renderer, scene, mesh->id, 2);
+
+        // Draw the mesh
+        mesh::draw(renderer->pContext.Get(), gpu_mesh);
+    }
+
+    // Render the skybox on top, using the same render target
+    render_skybox(renderer, scene->active_cam);
+
+    // Reset states?
+    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
+    renderer->pContext->RSSetState(renderer->default_raster.Get());
+}
+
+void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
+    // Bind the pipeline
+    ShaderPipeline *gbuffer_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->gbuffer_pipeline);
+    shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), gbuffer_pipeline);
+
+    // Update per frame constants
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    HRESULT hr = renderer->pContext->Map(renderer->pCBPerFrame.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to map per object constant buffer");
+        return;
+    }
+    CBPerFrame *perFramePtr = (CBPerFrame *)mappedResource.pData;
+    DirectX::XMStoreFloat4x4(&perFramePtr->viewProjectionMatrix, scene::camera_get_view_projection_matrix(scene->active_cam));
+    perFramePtr->camera_position = scene->active_cam->position;
+    renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
+    renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
+
+    // Render meshes
+    MaterialId current_material_bound = id::invalid();
+    for (int i = 0; i < MAX_SCENE_MESHES; ++i) {
+        SceneMesh *mesh = &scene->meshes[i];
+
+        if (id::is_invalid(mesh->id))
+            continue;
+
+        // If the material id is different from the currently bound
+        // bind the new one.
+        if (mesh->material_id.id != current_material_bound.id) {
+            // Get the material
+            Material *mat = material::get(renderer, mesh->material_id);
+            if (!mat) {
+                LOG("%s: Warning! Material couldn't be fetched", __func__);
+                continue;
             }
-            CBPerMaterial *per_mat_ptr = (CBPerMaterial *)mappedResource.pData;
-            per_mat_ptr->albedo = mat->albedo;
-            per_mat_ptr->metallic = mat->metallic;
-            per_mat_ptr->roughness = mat->rougness;
-            per_mat_ptr->emission_color = mat->emission_color;
-            renderer->pContext->Unmap(renderer->pCBPerMaterial.Get(), 0);
-            renderer->pContext->PSSetConstantBuffers(0, 1, renderer->pCBPerMaterial.GetAddressOf());
 
-            // Look up the texture based on the id
-            Texture *albedo_tex = &renderer->textures[mat->albedo_map.id];
-            Texture *metallic_tex = &renderer->textures[mat->metallic_map.id];
-            Texture *roughness_tex = &renderer->textures[mat->roughness_map.id];
-            Texture *normal_tex = &renderer->textures[mat->normal_map.id];
-            Texture *emission_tex = &renderer->textures[mat->emission_map.id];
-            ID3D11ShaderResourceView *srvs[] = {albedo_tex->srv.Get(), metallic_tex->srv.Get(), roughness_tex->srv.Get(), normal_tex->srv.Get(), emission_tex->srv.Get()};
-            renderer->pContext->PSSetShaderResources(ARRAYSIZE(env_srvs), ARRAYSIZE(srvs), srvs);
+            // Bind the material's values and textures
+            material::bind(renderer, mat, 0);
 
+            // Update the currently bound material
             current_material_bound = mat->id;
         }
 
@@ -792,13 +887,6 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
         // Draw the mesh
         mesh::draw(renderer->pContext.Get(), gpu_mesh);
     }
-
-    // Render the skybox on top, using the same render target
-    render_skybox(renderer, scene->active_cam);
-
-    // Reset states?
-    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
-    renderer->pContext->RSSetState(renderer->default_raster.Get());
 }
 
 void renderer::render_bloom_pass(Renderer *renderer) {
@@ -1495,4 +1583,3 @@ static bool create_default_shaders(Renderer *renderer) {
 
     return true;
 }
-

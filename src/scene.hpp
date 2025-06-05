@@ -8,6 +8,8 @@
 #define MAX_SCENE_MESHES 6
 #define MAX_SCENE_CAMERAS 4
 
+struct Renderer;
+
 using SceneId = Id;
 
 struct SceneMesh {
@@ -48,14 +50,18 @@ struct Scene {
     SceneCamera *active_cam;
 };
 
+// TODO: SceneId should refer to the scene's id, and what I use as SceneId now should
+// be specified as xxInstanceId, like MeshInstanceId
+
 namespace scene {
 
 bool initialize(Scene *out_scene);
 SceneId add_mesh(Scene *scene, Id mesh_id, Id material_id, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 rotation, DirectX::XMFLOAT3 scale);
 SceneId add_camera(Scene *scene, float fov, float znear, float zfar, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 target);
 
-DirectX::XMFLOAT3 mesh_get_rotation(Scene *scene, Id scene_mesh_id);
-DirectX::XMMATRIX mesh_get_world_matrix(Scene *scene, Id scene_mesh_id);
+void bind_mesh_instance(Renderer *renderer, Scene *scene, SceneId mesh_instance_id, uint8_t start_slot);
+DirectX::XMFLOAT3 mesh_get_rotation(Scene *scene, SceneId scene_mesh_id);
+DirectX::XMMATRIX mesh_get_world_matrix(Scene *scene, SceneId scene_mesh_id);
 
 DirectX::XMMATRIX camera_get_view_projection_matrix(SceneCamera *camera);
 DirectX::XMFLOAT4X4 camera_get_view_matrix(SceneCamera *camera);

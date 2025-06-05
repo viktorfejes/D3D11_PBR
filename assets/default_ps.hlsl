@@ -3,19 +3,21 @@ TextureCube irradianceMap : register(t0);
 TextureCube prefilterMap : register(t1);
 Texture2D brdf_lut : register(t2);
 
-// Material properties
+// Material Textures
 Texture2D albedoTex : register(t3);
 Texture2D metallicTex : register(t4);
 Texture2D roughnessTex : register(t5);
 Texture2D normalTex : register(t6);
 Texture2D emissionTex : register(t7);
+
+// Sampler for textures
 SamplerState samp : register(s0);
 
 cbuffer PerMaterialConstants : register(b0) {
     float3 albedo;
     float metallic;
-    float roughness;
     float3 emission_color;
+    float roughness;
 };
 
 struct PS_Input {

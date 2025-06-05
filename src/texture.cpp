@@ -9,6 +9,8 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
 
 static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_size, DXGI_FORMAT format, uint32_t bind_flags, bool is_cubemap, bool generate_srv, const void *data, uint32_t row_pitch);
 
@@ -186,7 +188,7 @@ TextureId texture::create(uint16_t width,
 bool texture::resize(TextureId id, uint16_t width, uint16_t height) {
     Renderer *renderer = application::get_renderer();
 
-    Texture *t = get(id);
+    Texture *t = get(renderer, id);
     if (!t) {
         return false;
     }
@@ -210,10 +212,7 @@ bool texture::resize(TextureId id, uint16_t width, uint16_t height) {
     return true;
 }
 
-Texture *texture::get(TextureId id) {
-    Renderer *renderer = application::get_renderer();
-    assert(renderer && "Renderer should be able to be retreived from application layer");
-
+Texture *texture::get(Renderer *renderer, TextureId id) {
     if (id::is_invalid(id)) {
         return nullptr;
     }
@@ -350,6 +349,109 @@ static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint
             return false;
         }
     }
+
+    return true;
+}
+
+bool texture::export_to_file(TextureId texture, const char *filename) {
+    Renderer *renderer = application::get_renderer();
+    ID3D11Device *device = renderer->pDevice.Get();
+    ID3D11DeviceContext *context = renderer->pContext.Get();
+
+    // Fetch the texture
+    Texture *tex = get(renderer, texture);
+    if (!tex) {
+        return false;
+    }
+
+    // Create staging texture
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_texture;
+
+    D3D11_TEXTURE2D_DESC staging_desc = {};
+    tex->texture->GetDesc(&staging_desc);
+
+    staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    staging_desc.Usage = D3D11_USAGE_STAGING;
+    staging_desc.BindFlags = 0;
+    staging_desc.MiscFlags = 0;
+
+    HRESULT hr = device->CreateTexture2D(&staging_desc, nullptr, staging_texture.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("%s: Couldn't create texture for staging buffer", __func__);
+        return false;
+    }
+
+    const int width = (int)staging_desc.Width;
+    const int height = (int)staging_desc.Height;
+    const int comp = 3;
+
+    float *rgb_data = (float *)malloc(sizeof(float) * width * height * comp);
+    if (!rgb_data) {
+        LOG("%s: Couldn't allocate data structure for texture", __func__);
+        return false;
+    }
+
+    if (tex->is_cubemap) {
+        static const char *face_names[6] = {"px", "nx", "py", "ny", "pz", "nz"};
+
+        for (UINT face = 0; face < 6; ++face) {
+            // Copy to staging
+            UINT subresource = D3D11CalcSubresource(0, face, staging_desc.MipLevels);
+            context->CopySubresourceRegion(staging_texture.Get(), 0, 0, 0, 0, tex->texture.Get(), subresource, NULL);
+
+            D3D11_MAPPED_SUBRESOURCE mapped = {};
+            hr = context->Map(staging_texture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+            if (FAILED(hr)) {
+                free(rgb_data);
+                return false;
+            }
+
+            float *dst = rgb_data;
+            for (int y = 0; y < height; ++y) {
+                const float *src = (const float *)((uint8_t *)mapped.pData + y * mapped.RowPitch);
+                for (int x = 0; x < width; ++x) {
+                    dst[0] = src[x * 4 + 0];
+                    dst[1] = src[x * 4 + 1];
+                    dst[2] = src[x * 4 + 2];
+                    dst += 3;
+                }
+            }
+
+            context->Unmap(staging_texture.Get(), 0);
+
+            char full_name[512];
+            snprintf(full_name, sizeof(full_name), "%s_%s.hdr", filename, face_names[face]);
+            stbi_write_hdr(full_name, width, height, comp, rgb_data);
+        }
+    } else {
+        context->CopyResource(staging_texture.Get(), tex->texture.Get());
+
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        hr = context->Map(staging_texture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        if (FAILED(hr)) {
+            LOG("%s: Failed to map staging texture", __func__);
+            return false;
+        }
+
+        float *dst = rgb_data;
+        for (int y = 0; y < height; ++y) {
+            const float *src = (const float *)((uint8_t *)mapped.pData + y * mapped.RowPitch);
+            for (int x = 0; x < width; ++x) {
+                dst[0] = src[x * 4 + 0];
+                dst[1] = src[x * 4 + 1];
+                dst[2] = src[x * 4 + 2];
+                dst += 3;
+            }
+        }
+
+        context->Unmap(staging_texture.Get(), 0);
+
+        char full_name[512];
+        snprintf(full_name, sizeof(full_name), "%s.hdr", filename);
+        stbi_write_hdr(full_name, width, height, comp, rgb_data);
+    }
+
+    free(rgb_data);
 
     return true;
 }

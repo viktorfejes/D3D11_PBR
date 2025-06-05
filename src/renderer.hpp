@@ -35,10 +35,10 @@ struct alignas(16) CBPerObject {
 };
 
 struct alignas(16) CBPerMaterial {
-    DirectX::XMFLOAT3 albedo;
-    float metallic;
-    float roughness;
-    DirectX::XMFLOAT3 emission_color;
+    DirectX::XMFLOAT3 albedo_color;     // 12 bytes
+    float metallic_value;               // 4 bytes -> float4 boundary
+    DirectX::XMFLOAT3 emission_color;   // 12 bytes
+    float roughness_value;              // 4 bytes -> float4 boundary
 };
 
 struct FSVertex {
@@ -62,6 +62,12 @@ struct alignas(16) FXAAConstants {
 
 struct alignas(16) CBEquirectToCube {
     uint32_t face_index;
+    float padding[3];
+};
+
+struct alignas(16) CBGBufferPerObject {
+    DirectX::XMFLOAT4X4 world_matrix;
+    DirectX::XMFLOAT3X3 world_inv_transpose;
     float padding[3];
 };
 
@@ -134,6 +140,10 @@ struct Renderer {
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> skybox_cb_ptr;
     PipelineId skybox_shader;
+
+    // G-Buffer
+    PipelineId gbuffer_pipeline;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> gbuffer_cb_ptr;
 };
 
 namespace renderer {
@@ -141,17 +151,20 @@ namespace renderer {
 bool initialize(Renderer *renderer, Window *window);
 void shutdown(Renderer *renderer);
 
+// TODO: These should probably be static, as well
 PipelineId create_pbr_shader_pipeline(Renderer *renderer);
 PipelineId create_tonemap_shader_pipeline(Renderer *renderer);
 bool create_bloom_shader_pipeline(Renderer *renderer, PipelineId *threshold_pipeline, PipelineId *downsample_pipeline, PipelineId *upsample_pipeline);
 PipelineId create_fxaa_pipeline(Renderer *renderer);
 PipelineId create_skybox_pipeline(Renderer *renderer);
+PipelineId create_gbuffer_pipeline(Renderer *renderer);
 
 void begin_frame(Renderer *renderer);
 void end_frame(Renderer *renderer);
 void render(Renderer *renderer, Scene *scene);
 
 void render_scene(Renderer *renderer, Scene *scene);
+void render_gbuffer(Renderer *renderer, Scene *scene);
 void render_bloom_pass(Renderer *renderer);
 void render_fxaa_pass(Renderer *renderer);
 void render_tonemap_pass(Renderer *renderer);

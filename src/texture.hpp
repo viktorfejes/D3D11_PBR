@@ -6,6 +6,8 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+struct Renderer;
+
 using TextureId = Id;
 #define MAX_MIP_LEVELS 16
 
@@ -42,6 +44,7 @@ TextureId create(uint16_t width,
                  uint32_t mip_levels,
                  bool is_cubemap);
 bool resize(TextureId id, uint16_t width, uint16_t height);
-Texture *get(TextureId id);
+Texture *get(Renderer *renderer, TextureId id);
+bool export_to_file(TextureId texture, const char *filename);
 
 } // namespace texture

@@ -6,6 +6,8 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+struct Renderer;
+
 using MeshId = Id;
 
 struct Vertex {
@@ -30,6 +32,8 @@ MeshId load(const char *filename);
 bool load_obj(const char *filename);
 bool load_gltf(const char *filename);
 void destroy(MeshId mesh_id);
+Mesh *get(Renderer *renderer, MeshId mesh_id);
+void bind(Renderer *renderer, Mesh *mesh);
 void draw(ID3D11DeviceContext *context, Mesh *mesh);
 
 } // namespace mesh
