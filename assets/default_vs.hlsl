@@ -5,6 +5,10 @@ cbuffer PerFrameConstants : register(b0) {
 
 cbuffer PerObjectConstants : register(b2) {
     row_major float4x4 worldMatrix;
+    row_major float3x3 worldInvTransposeMatrix;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 };
 
 struct VS_Input {

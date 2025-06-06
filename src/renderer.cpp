@@ -758,7 +758,7 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
         return;
     }
     CBPerFrame *perFramePtr = (CBPerFrame *)mappedResource.pData;
-    DirectX::XMStoreFloat4x4(&perFramePtr->viewProjectionMatrix, scene::camera_get_view_projection_matrix(scene->active_cam));
+    perFramePtr->viewProjectionMatrix = scene::camera_get_view_projection_matrix(scene->active_cam);
     perFramePtr->camera_position = scene->active_cam->position;
     renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
     renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
@@ -837,8 +837,10 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
         return;
     }
     CBPerFrame *perFramePtr = (CBPerFrame *)mappedResource.pData;
-    DirectX::XMStoreFloat4x4(&perFramePtr->viewProjectionMatrix, scene::camera_get_view_projection_matrix(scene->active_cam));
+    perFramePtr->viewProjectionMatrix = scene::camera_get_view_projection_matrix(scene->active_cam);
+    // TODO: This won't be needed for the gbuffer
     perFramePtr->camera_position = scene->active_cam->position;
+
     renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
     renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
 
@@ -868,21 +870,13 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
         }
 
         // Lookup the mesh gpu resource through the mesh_id
-        Mesh *gpu_mesh = &renderer->meshes[mesh->mesh_id.id];
-        if (!gpu_mesh || id::is_stale(gpu_mesh->id, mesh->mesh_id)) {
+        Mesh *gpu_mesh = mesh::get(renderer, mesh->mesh_id);
+        if (!gpu_mesh) {
             continue;
         }
 
-        // Update per object constant buffer
-        hr = renderer->pContext->Map(renderer->pCBPerObject.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
-        if (FAILED(hr)) {
-            LOG("Renderer error: Failed to map per object constant buffer");
-            return;
-        }
-        CBPerObject *perObjectPtr = (CBPerObject *)mappedResource.pData;
-        DirectX::XMStoreFloat4x4(&perObjectPtr->worldMatrix, scene::mesh_get_world_matrix(scene, mesh->mesh_id));
-        renderer->pContext->Unmap(renderer->pCBPerObject.Get(), 0);
-        renderer->pContext->VSSetConstantBuffers(2, 1, renderer->pCBPerObject.GetAddressOf());
+        // Bind mesh instance
+        scene::bind_mesh_instance(renderer, scene, mesh->id, 2);
 
         // Draw the mesh
         mesh::draw(renderer->pContext.Get(), gpu_mesh);

@@ -32,6 +32,8 @@ struct alignas(16) CBSkybox {
 
 struct alignas(16) CBPerObject {
     DirectX::XMFLOAT4X4 worldMatrix;
+    DirectX::XMFLOAT3X3 worldInvTrans;
+    float _padding[3];
 };
 
 struct alignas(16) CBPerMaterial {
