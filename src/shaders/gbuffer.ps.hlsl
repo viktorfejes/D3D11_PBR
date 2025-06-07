@@ -1,7 +1,9 @@
 // Textures
 Texture2D albedoTexture : register(t0);
-Texture2D normalTexture : register(t1);
-Texture2D ORMTexture    : register(t2);
+Texture2D metallicTexture : register(t1);
+Texture2D roughnessTexture : register(t2);
+Texture2D normalTexture : register(t3);
+Texture2D emissionTexture : register(t4);
 
 // Samplers
 SamplerState linearSampler : register(s0);
@@ -34,11 +36,10 @@ PSOutput main(VSOutput input) {
 
     float3 albedoTex = albedoTexture.Sample(linearSampler, uv).rgb;
     float3 normalTex = normalTexture.Sample(linearSampler, uv).xyz * 2.0 - 1.0; // Decode from [0,1] to [-1,1]
-    float4 ORM = ORMTexture.Sample(linearSampler, uv);
 
-    float roughness = roughnessValue * ORM.g;
-    float metallic = metallicValue * ORM.b;
-    float ao = ORM.r;
+    float roughness = roughnessValue * roughnessTexture.Sample(linearSampler, uv).r;
+    float metallic = metallicValue * metallicTexture.Sample(linearSampler, uv).r;
+//  float ao = ORM.r;
 
     // Reconstruct TBN matrix for normal mapping
     float3 N = normalize(input.worldNormal);
@@ -55,10 +56,10 @@ PSOutput main(VSOutput input) {
     PSOutput output;
     // Albedo (RGB) + Roughness (A)
     output.rt0 = float4(albedoColor * albedoTex, roughness);
-    // World-space normal (RGB) + Metallic (A)
-    output.rt1 = float4(encodedNormal, metallic);
-    // Emission color (RGB) + AO (A)
-    output.rt2 = float4(emissionColor, ao);
+    // World-space normal (RGB)
+    output.rt1 = float4(encodedNormal, 1.0);
+    // Emission color (RGB) + Metallic (A)
+    output.rt2 = float4(emissionColor, metallic);
 
     return output;
 }

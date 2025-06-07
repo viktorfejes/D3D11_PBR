@@ -166,10 +166,10 @@ DirectX::XMFLOAT4X4 scene::mesh_get_world_matrix(Scene *scene, SceneId scene_mes
             DirectX::XMConvertToRadians(sm->rotation.z));
 
         DirectX::XMMATRIX R = DirectX::XMMatrixRotationQuaternion(quat);
-        DirectX::XMMATRIX translationMatrix = DirectX::XMMatrixTranslation(sm->position.x, sm->position.y, sm->position.z);
-        DirectX::XMMATRIX scaleMatrix = DirectX::XMMatrixScaling(sm->scale.x, sm->scale.y, sm->scale.z);
+        DirectX::XMMATRIX T = DirectX::XMMatrixTranslation(sm->position.x, sm->position.y, sm->position.z);
+        DirectX::XMMATRIX S = DirectX::XMMatrixScaling(sm->scale.x, sm->scale.y, sm->scale.z);
 
-        DirectX::XMMATRIX world_matrix = scaleMatrix * R * translationMatrix;
+        DirectX::XMMATRIX world_matrix = S * R * T;
 
         // Calculate inverse transpose world matrix as well here
         DirectX::XMMATRIX no_translate_matrix = world_matrix;
@@ -177,7 +177,7 @@ DirectX::XMFLOAT4X4 scene::mesh_get_world_matrix(Scene *scene, SceneId scene_mes
         DirectX::XMMATRIX inv_transpose_3x3 = DirectX::XMMatrixTranspose(DirectX::XMMatrixInverse(nullptr, no_translate_matrix));
 
         DirectX::XMStoreFloat4x4(&sm->world_matrix, world_matrix);
-        DirectX::XMStoreFloat3x3(&sm->world_inv_transpose, inv_transpose_3x3);
+        DirectX::XMStoreFloat4x4(&sm->world_inv_transpose, inv_transpose_3x3);
 
         sm->is_dirty = false;
     }
@@ -185,16 +185,17 @@ DirectX::XMFLOAT4X4 scene::mesh_get_world_matrix(Scene *scene, SceneId scene_mes
     return sm->world_matrix;
 }
 
-DirectX::XMFLOAT3X3 scene::mesh_get_world_inv_transpose_matrix(Scene *scene, SceneId scene_mesh_id) {
+DirectX::XMFLOAT4X4 scene::mesh_get_world_inv_transpose_matrix(Scene *scene, SceneId scene_mesh_id) {
     assert(scene && "scene::mesh_get_world_inv_transpose_matrix: Scene pointer cannot be NULL");
 
     // Fetch the right mesh based on whether it is stale or not
     SceneMesh *sm = &scene->meshes[scene_mesh_id.id];
     if (!sm || id::is_stale(sm->id, scene_mesh_id)) {
-        return DirectX::XMFLOAT3X3{
-            1, 0, 0,
-            0, 1, 0,
-            0, 0, 1};
+        return DirectX::XMFLOAT4X4{
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1};
     }
 
     if (sm->is_dirty) {
@@ -204,10 +205,10 @@ DirectX::XMFLOAT3X3 scene::mesh_get_world_inv_transpose_matrix(Scene *scene, Sce
             DirectX::XMConvertToRadians(sm->rotation.z));
 
         DirectX::XMMATRIX R = DirectX::XMMatrixRotationQuaternion(quat);
-        DirectX::XMMATRIX translationMatrix = DirectX::XMMatrixTranslation(sm->position.x, sm->position.y, sm->position.z);
-        DirectX::XMMATRIX scaleMatrix = DirectX::XMMatrixScaling(sm->scale.x, sm->scale.y, sm->scale.z);
+        DirectX::XMMATRIX T = DirectX::XMMatrixTranslation(sm->position.x, sm->position.y, sm->position.z);
+        DirectX::XMMATRIX S = DirectX::XMMatrixScaling(sm->scale.x, sm->scale.y, sm->scale.z);
 
-        DirectX::XMMATRIX world_matrix = scaleMatrix * R * translationMatrix;
+        DirectX::XMMATRIX world_matrix = S * R * T;
 
         // Calculate inverse transpose world matrix as well here
         DirectX::XMMATRIX no_translate_matrix = world_matrix;
@@ -215,7 +216,7 @@ DirectX::XMFLOAT3X3 scene::mesh_get_world_inv_transpose_matrix(Scene *scene, Sce
         DirectX::XMMATRIX inv_transpose_3x3 = DirectX::XMMatrixTranspose(DirectX::XMMatrixInverse(nullptr, no_translate_matrix));
 
         DirectX::XMStoreFloat4x4(&sm->world_matrix, world_matrix);
-        DirectX::XMStoreFloat3x3(&sm->world_inv_transpose, inv_transpose_3x3);
+        DirectX::XMStoreFloat4x4(&sm->world_inv_transpose, inv_transpose_3x3);
 
         sm->is_dirty = false;
     }
@@ -223,7 +224,6 @@ DirectX::XMFLOAT3X3 scene::mesh_get_world_inv_transpose_matrix(Scene *scene, Sce
     return sm->world_inv_transpose;
 }
 
-// TODO: Change this to XMFLOAT4X4 return isntead of the SIMD XMMATRIX
 DirectX::XMFLOAT4X4 scene::camera_get_view_projection_matrix(SceneCamera *camera) {
     assert(camera && "scene::camera_get_view_projection_matrix: Camera pointer cannot be NULL");
 

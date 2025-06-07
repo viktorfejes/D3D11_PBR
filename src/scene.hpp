@@ -21,7 +21,7 @@ struct SceneMesh {
     DirectX::XMFLOAT3 scale;
 
     DirectX::XMFLOAT4X4 world_matrix;
-    DirectX::XMFLOAT3X3 world_inv_transpose;
+    DirectX::XMFLOAT4X4 world_inv_transpose;
 
     bool is_dirty;
 };
@@ -65,7 +65,7 @@ SceneId add_camera(Scene *scene, float fov, float znear, float zfar, DirectX::XM
 void bind_mesh_instance(Renderer *renderer, Scene *scene, SceneId mesh_instance_id, uint8_t start_slot);
 DirectX::XMFLOAT3 mesh_get_rotation(Scene *scene, SceneId scene_mesh_id);
 DirectX::XMFLOAT4X4 mesh_get_world_matrix(Scene *scene, SceneId scene_mesh_id);
-DirectX::XMFLOAT3X3 mesh_get_world_inv_transpose_matrix(Scene *scene, SceneId scene_mesh_id);
+DirectX::XMFLOAT4X4 mesh_get_world_inv_transpose_matrix(Scene *scene, SceneId scene_mesh_id);
 
 DirectX::XMFLOAT4X4 camera_get_view_projection_matrix(SceneCamera *camera);
 DirectX::XMFLOAT4X4 camera_get_view_matrix(SceneCamera *camera);

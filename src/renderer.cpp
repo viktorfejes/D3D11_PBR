@@ -677,6 +677,14 @@ PipelineId renderer::create_gbuffer_pipeline(Renderer *renderer) {
         return id::invalid();
     }
 
+    // Define the pbr input layout
+    D3D11_INPUT_ELEMENT_DESC pbr_input_desc[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+
     ShaderId gbuffer_modules[] = {gbuffer_vs, gbuffer_ps};
 
     PipelineId gbuffer_pipeline = shader::create_pipeline(
@@ -684,12 +692,39 @@ PipelineId renderer::create_gbuffer_pipeline(Renderer *renderer) {
         renderer->pDevice.Get(),
         gbuffer_modules,
         ARRAYSIZE(gbuffer_modules),
-        nullptr, 0);
+        pbr_input_desc, ARRAYSIZE(pbr_input_desc));
 
     if (id::is_invalid(gbuffer_pipeline)) {
         LOG("%s: Couldn't create shader pipeline for G-buffer", __func__);
         return id::invalid();
     }
+
+    // Create RTV's for the G-Buffer.
+    // Should these just be part of the pipeline and be bound with it?
+    // Albedo (RGB) + Roughness (A)
+    renderer->gbuffer_rt0 = texture::create(
+        renderer->pWindow->width, renderer->pWindow->height,
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+        true,
+        nullptr, 0,
+        1, 1, false);
+    // World-space normal (RGB)
+    renderer->gbuffer_rt1 = texture::create(
+        renderer->pWindow->width, renderer->pWindow->height,
+        DXGI_FORMAT_R10G10B10A2_UNORM,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+        true,
+        nullptr, 0,
+        1, 1, false);
+    // Emission color (RGB) + Metallic (A)
+    renderer->gbuffer_rt2 = texture::create(
+        renderer->pWindow->width, renderer->pWindow->height,
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+        true,
+        nullptr, 0,
+        1, 1, false);
 
     return gbuffer_pipeline;
 }
@@ -731,6 +766,9 @@ void renderer::render(Renderer *renderer, Scene *scene) {
 
     // Rendering scene - meshes, materials...etc.
     render_scene(renderer, scene);
+
+    // WARNING: Test render for gbuffer
+    render_gbuffer(renderer, scene);
 
     // Unbind the depth stencil state
     renderer->pContext->OMSetDepthStencilState(nullptr, 0);
@@ -810,7 +848,7 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
         }
 
         // Bind mesh instance
-        scene::bind_mesh_instance(renderer, scene, mesh->id, 2);
+        scene::bind_mesh_instance(renderer, scene, mesh->id, 1);
 
         // Draw the mesh
         mesh::draw(renderer->pContext.Get(), gpu_mesh);
@@ -829,6 +867,11 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
     ShaderPipeline *gbuffer_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->gbuffer_pipeline);
     shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), gbuffer_pipeline);
 
+    // Set some of the states...
+    renderer->pContext->OMSetDepthStencilState(renderer->pDepthStencilState.Get(), 0);
+    renderer->pContext->RSSetState(renderer->default_raster.Get());
+    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
+
     // Update per frame constants
     D3D11_MAPPED_SUBRESOURCE mappedResource;
     HRESULT hr = renderer->pContext->Map(renderer->pCBPerFrame.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
@@ -843,6 +886,22 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
 
     renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
     renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
+
+    // Bind render targets
+    Texture *rtv0 = texture::get(renderer, renderer->gbuffer_rt0);
+    Texture *rtv1 = texture::get(renderer, renderer->gbuffer_rt1);
+    Texture *rtv2 = texture::get(renderer, renderer->gbuffer_rt2);
+    Texture *depth = texture::get(renderer, renderer->scene_depth);
+
+    ID3D11RenderTargetView *rtvs[] = {rtv0->rtv[0].Get(), rtv1->rtv[0].Get(), rtv2->rtv[0].Get()};
+
+    const float clear_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    renderer->pContext->ClearRenderTargetView(rtvs[0], clear_color);
+    renderer->pContext->ClearRenderTargetView(rtvs[1], clear_color);
+    renderer->pContext->ClearRenderTargetView(rtvs[2], clear_color);
+    renderer->pContext->ClearDepthStencilView(depth->dsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+
+    renderer->pContext->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, depth->dsv.Get());
 
     // Render meshes
     MaterialId current_material_bound = id::invalid();
@@ -876,7 +935,7 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
         }
 
         // Bind mesh instance
-        scene::bind_mesh_instance(renderer, scene, mesh->id, 2);
+        scene::bind_mesh_instance(renderer, scene, mesh->id, 1);
 
         // Draw the mesh
         mesh::draw(renderer->pContext.Get(), gpu_mesh);

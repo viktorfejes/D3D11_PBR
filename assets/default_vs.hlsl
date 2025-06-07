@@ -3,7 +3,7 @@ cbuffer PerFrameConstants : register(b0) {
     float3 cameraPosition;
 };
 
-cbuffer PerObjectConstants : register(b2) {
+cbuffer PerObjectConstants : register(b1) {
     row_major float4x4 worldMatrix;
     row_major float3x3 worldInvTransposeMatrix;
     float _pad0;

@@ -32,8 +32,7 @@ struct alignas(16) CBSkybox {
 
 struct alignas(16) CBPerObject {
     DirectX::XMFLOAT4X4 worldMatrix;
-    DirectX::XMFLOAT3X3 worldInvTrans;
-    float _padding[3];
+    DirectX::XMFLOAT4X4 worldInvTrans;
 };
 
 struct alignas(16) CBPerMaterial {
@@ -146,6 +145,9 @@ struct Renderer {
     // G-Buffer
     PipelineId gbuffer_pipeline;
     Microsoft::WRL::ComPtr<ID3D11Buffer> gbuffer_cb_ptr;
+    TextureId gbuffer_rt0;
+    TextureId gbuffer_rt1;
+    TextureId gbuffer_rt2;
 };
 
 namespace renderer {
