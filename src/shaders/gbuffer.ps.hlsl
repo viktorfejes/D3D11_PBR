@@ -11,8 +11,8 @@ SamplerState linearSampler : register(s0);
 cbuffer PerMaterialConstants : register(b0) {
     float3 albedoColor;
     float metallicValue;
-    float roughnessValue;
     float3 emissionColor;
+    float roughnessValue;
 };
 
 // Incoming data from vertex shader

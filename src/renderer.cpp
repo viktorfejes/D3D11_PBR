@@ -322,6 +322,13 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         return false;
     }
 
+    // Create pipeline for Lighting Pass
+    renderer->lighting_pass_pipeline = create_lighting_pass_pipeline(renderer);
+    if (id::is_invalid(renderer->lighting_pass_pipeline)) {
+        LOG("%s: Couldn't create Lighting Pass shader pipeline", __func__);
+        return false;
+    }
+
     // Set the viewport
     D3D11_VIEWPORT vp;
     vp.Width = (FLOAT)pWindow->width;
@@ -343,8 +350,8 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     renderer->scene_depth = texture::create(
         pWindow->width, pWindow->height,
         DXGI_FORMAT_D24_UNORM_S8_UINT,
-        D3D11_BIND_DEPTH_STENCIL,
-        false,
+        D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE,
+        true,
         nullptr, 0,
         1, 1, false);
 
@@ -729,6 +736,46 @@ PipelineId renderer::create_gbuffer_pipeline(Renderer *renderer) {
     return gbuffer_pipeline;
 }
 
+PipelineId renderer::create_lighting_pass_pipeline(Renderer *renderer) {
+    D3D11_BUFFER_DESC cb_desc = {};
+    cb_desc.Usage = D3D11_USAGE_DYNAMIC;
+    cb_desc.ByteWidth = sizeof(CBLighting);
+    cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    HRESULT hr = renderer->pDevice->CreateBuffer(&cb_desc, nullptr, renderer->lp_cb_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create constant buffer for lighting pass");
+        return id::invalid();
+    }
+
+    ShaderId lighting_pass_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/lighting_pass.ps.hlsl",
+        SHADER_STAGE_PS,
+        "main");
+
+    ShaderId lighting_pass_modules[] = {renderer->fullscreen_triangle_vs, lighting_pass_ps};
+
+    PipelineId lighting_pass_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        lighting_pass_modules,
+        ARRAYSIZE(lighting_pass_modules),
+        nullptr, 0);
+
+    renderer->lighting_rt = texture::create(
+        renderer->pWindow->width, renderer->pWindow->height,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+        true,
+        nullptr, 0,
+        1, 1, false);
+
+    return lighting_pass_pipeline;
+}
+
 void renderer::begin_frame(Renderer *renderer) {
     ID3D11DeviceContext *context = renderer->pContext.Get();
 
@@ -765,13 +812,16 @@ void renderer::render(Renderer *renderer, Scene *scene) {
     renderer->pContext->OMSetDepthStencilState(renderer->pDepthStencilState.Get(), 1);
 
     // Rendering scene - meshes, materials...etc.
-    render_scene(renderer, scene);
+    // render_scene(renderer, scene);
 
     // WARNING: Test render for gbuffer
     render_gbuffer(renderer, scene);
 
-    // Unbind the depth stencil state
-    renderer->pContext->OMSetDepthStencilState(nullptr, 0);
+    // WARNING: Test render for lighting pass
+    render_lighting_pass(renderer, scene);
+
+    // Render the environment map
+    render_skybox(renderer, scene->active_cam);
 
     // Render FXAA pass
     render_fxaa_pass(renderer);
@@ -853,13 +903,6 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
         // Draw the mesh
         mesh::draw(renderer->pContext.Get(), gpu_mesh);
     }
-
-    // Render the skybox on top, using the same render target
-    render_skybox(renderer, scene->active_cam);
-
-    // Reset states?
-    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
-    renderer->pContext->RSSetState(renderer->default_raster.Get());
 }
 
 void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
@@ -940,6 +983,76 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
         // Draw the mesh
         mesh::draw(renderer->pContext.Get(), gpu_mesh);
     }
+
+    // Unbind RTV's
+    ID3D11RenderTargetView *nullRTVs[8] = {nullptr};
+    renderer->pContext->OMSetRenderTargets(_countof(nullRTVs), nullRTVs, nullptr);
+}
+
+void renderer::render_lighting_pass(Renderer *renderer, Scene *scene) {
+    ID3D11DeviceContext *context = renderer->pContext.Get();
+
+    // Bind the pipeline
+    ShaderPipeline *lighting_pass_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->lighting_pass_pipeline);
+    shader::bind_pipeline(&renderer->shader_system, context, lighting_pass_pipeline);
+
+    // No depth testing
+    renderer->pContext->OMSetDepthStencilState(nullptr, 0);
+
+    // Fetch G-buffer SRV's
+    Texture *albedo_roughness = texture::get(renderer, renderer->gbuffer_rt0);
+    Texture *world_normal = texture::get(renderer, renderer->gbuffer_rt1);
+    Texture *emission_metallic = texture::get(renderer, renderer->gbuffer_rt2);
+    if (!albedo_roughness || !world_normal || !emission_metallic) {
+        return;
+    }
+
+    // Fetch the depth texture
+    Texture *depth_tex = texture::get(renderer, renderer->scene_depth);
+    if (!depth_tex) return;
+
+    // Fetch the IBL
+    Texture *irradiance_tex = texture::get(renderer, renderer->irradiance_cubemap);
+    Texture *prefilter_map = texture::get(renderer, renderer->prefilter_map);
+    Texture *brdf_lut = texture::get(renderer, renderer->brdf_lut);
+    if (!irradiance_tex || !prefilter_map || !brdf_lut) {
+        return;
+    }
+
+    ID3D11ShaderResourceView *srvs[] = {
+        albedo_roughness->srv.Get(),
+        world_normal->srv.Get(),
+        emission_metallic->srv.Get(),
+        depth_tex->srv.Get(),
+        irradiance_tex->srv.Get(),
+        prefilter_map->srv.Get(),
+        brdf_lut->srv.Get(),
+    };
+
+    // Bind the SRVs
+    context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+    // Bind the RTV
+    Texture *lighting_rt = texture::get(renderer, renderer->scene_color);
+    if (!lighting_rt) return;
+    context->OMSetRenderTargets(1, lighting_rt->rtv[0].GetAddressOf(), nullptr);
+
+    // Bind the constant buffer with Camera Position and Inverse View Projection Matrix
+    DirectX::XMFLOAT4X4 view_projection = scene::camera_get_view_projection_matrix(scene->active_cam);
+    DirectX::XMMATRIX inv_view_projection = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&view_projection));
+
+    D3D11_MAPPED_SUBRESOURCE map;
+    context->Map(renderer->lp_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
+    ((CBLighting *)map.pData)->camera_position = scene->active_cam->position;
+    DirectX::XMStoreFloat4x4(&((CBLighting *)map.pData)->inv_view_projection, inv_view_projection);
+    context->Unmap(renderer->lp_cb_ptr.Get(), 0);
+    context->PSSetConstantBuffers(0, 1, renderer->lp_cb_ptr.GetAddressOf());
+
+    context->Draw(3, 0);
+
+    // Unbind SRVs
+    ID3D11ShaderResourceView *nullSRVs[8] = {nullptr};
+    context->PSSetShaderResources(0, 8, nullSRVs);
 }
 
 void renderer::render_bloom_pass(Renderer *renderer) {
@@ -1066,6 +1179,9 @@ void renderer::render_fxaa_pass(Renderer *renderer) {
     ShaderPipeline *fxaa_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->fxaa_shader);
     shader::bind_pipeline(&renderer->shader_system, context, fxaa_pipeline);
 
+    // Unbind the depth stencil state
+    renderer->pContext->OMSetDepthStencilState(nullptr, 0);
+
     ID3D11ShaderResourceView *srvs[] = {scene_srv};
     renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -1128,6 +1244,12 @@ void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
     // Bind the skybox shader
     shader::bind_pipeline(&renderer->shader_system, context, skybox_shader);
 
+    // Bind the RTV
+    Texture *scene_rt = texture::get(renderer, renderer->scene_color);
+    Texture *depth = texture::get(renderer, renderer->scene_depth);
+    if (!scene_rt) return;
+    context->OMSetRenderTargets(1, scene_rt->rtv[0].GetAddressOf(), depth->dsv.Get());
+
     // Bind the skybox states
     context->OMSetDepthStencilState(renderer->skybox_depth_state.Get(), 0);
     context->RSSetState(renderer->skybox_raster.Get());
@@ -1150,6 +1272,10 @@ void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
 
     // Draw cube hardcoded into vertex shader
     context->Draw(36, 0);
+
+    // Reset states?
+    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
+    renderer->pContext->RSSetState(renderer->default_raster.Get());
 }
 
 void renderer::bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv) {

@@ -12,7 +12,14 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
+struct FormatBindingInfo {
+    DXGI_FORMAT texture_format;
+    DXGI_FORMAT dsv_format;
+    DXGI_FORMAT srv_format;
+};
+
 static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_size, DXGI_FORMAT format, uint32_t bind_flags, bool is_cubemap, bool generate_srv, const void *data, uint32_t row_pitch);
+static FormatBindingInfo get_format_binding_info(DXGI_FORMAT format);
 
 TextureId texture::load(const char *filename, bool is_srgb) {
     // stbi_set_flip_vertically_on_load(1);
@@ -224,13 +231,17 @@ Texture *texture::get(Renderer *renderer, TextureId id) {
 }
 
 static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_size, DXGI_FORMAT format, uint32_t bind_flags, bool is_cubemap, bool generate_srv, const void *data, uint32_t row_pitch) {
+    // In case it's a depth texture that should be an SRV as well
+    bool depth_srv = (bind_flags & D3D11_BIND_DEPTH_STENCIL) && generate_srv;
+    FormatBindingInfo depth_srv_format = get_format_binding_info(format);
+
     // Upload to GPU straight away
     D3D11_TEXTURE2D_DESC desc = {};
     desc.Width = width;
     desc.Height = height;
     desc.MipLevels = mip_levels;
     desc.ArraySize = array_size;
-    desc.Format = format;
+    desc.Format = depth_srv ? depth_srv_format.texture_format : format;
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = bind_flags;
@@ -258,7 +269,7 @@ static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint
 
     if (generate_srv && (bind_flags & D3D11_BIND_SHADER_RESOURCE)) {
         D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-        srv_desc.Format = format;
+        srv_desc.Format = depth_srv ? depth_srv_format.srv_format : format;
 
         if (is_cubemap) {
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
@@ -339,7 +350,7 @@ static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint
 
     if (bind_flags & D3D11_BIND_DEPTH_STENCIL) {
         D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
-        dsv_desc.Format = format;
+        dsv_desc.Format = depth_srv ? depth_srv_format.dsv_format : format;
         dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
 
         // Create the DSV
@@ -454,4 +465,15 @@ bool texture::export_to_file(TextureId texture, const char *filename) {
     free(rgb_data);
 
     return true;
+}
+
+static FormatBindingInfo get_format_binding_info(DXGI_FORMAT format) {
+    switch (format) {
+        case DXGI_FORMAT_D24_UNORM_S8_UINT:
+            return {DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_R24_UNORM_X8_TYPELESS};
+        case DXGI_FORMAT_D32_FLOAT:
+            return {DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_D32_FLOAT, DXGI_FORMAT_R32_FLOAT};
+        default:
+            return {format, format, format};
+    }
 }

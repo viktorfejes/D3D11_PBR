@@ -5,14 +5,14 @@
                 {
                     "mesh_id": 0,
                     "material_id": 0,
-                    "position": [0.0, 100.0, 0.0],
+                    "position": [0.0, 50.0, 0.0],
                     "rotation": [0.0, -90.0, 0.0],
                     "scale": [1.0, 1.0, 1.0]
                 },
                 {
                     "mesh_id": 1,
                     "material_id": 1,
-                    "position": [10.0, 0.0, 0.0],
+                    "position": [0.0, 0.0, 0.0],
                     "rotation": [0.0, 0.0, 0.0],
                     "scale": [0.1, 0.1, 0.1]
                 }
@@ -97,7 +97,7 @@
             "id": 0,
             "albedo": [1.0, 1.0, 1.0],
             "albedo_map": 0,
-            "roughness": 0.5,
+            "roughness": 1.0,
             "roughness_map": 1,
             "metallic": 1.0,
             "metallic_map": 3,
@@ -109,7 +109,7 @@
             "id": 1,
             "albedo": [1.0, 1.0, 1.0],
             "albedo_map": 5,
-            "roughness": 0.5,
+            "roughness": 1.0,
             "roughness_map": 6,
             "metallic": 1.0,
             "metallic_map": 8,
