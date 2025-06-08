@@ -8,7 +8,7 @@
 #include "texture.hpp"
 #include <cassert>
 
-MaterialId material::create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, float metallic_value, Id metallic_texture, float roughness_value, Id roughness_texture, Id normal_texture, DirectX::XMFLOAT3 emission_color, Id emission_texture) {
+MaterialId material::create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, float metallic_value, Id metallic_texture, float roughness_value, Id roughness_texture, Id normal_texture, float emission_intensity, Id emission_texture) {
     // Materials are kept in the renderer so fetching that here
     Renderer *renderer = application::get_renderer();
 
@@ -33,7 +33,7 @@ MaterialId material::create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, f
     mat->albedo_color = albedo_color;
     mat->metallic_value = metallic_value;
     mat->roughness_value = roughness_value;
-    mat->emission_color = emission_color;
+    mat->emission_intensity = emission_intensity;
 
     // Material textures
     mat->albedo_texture = albedo_texture;
@@ -66,7 +66,7 @@ void material::bind(Renderer *renderer, Material *material, uint8_t start_slot) 
 
     CBPerMaterial *cb_ptr = (CBPerMaterial *)mappedResource.pData;
     cb_ptr->albedo_color = material->albedo_color;
-    cb_ptr->emission_color = material->emission_color;
+    cb_ptr->emission_intensity = material->emission_intensity;
     cb_ptr->metallic_value = material->metallic_value;
     cb_ptr->roughness_value = material->roughness_value;
 

@@ -47,6 +47,7 @@ float4 main(PSInput input) : SV_TARGET {
     // =======================================================
     float3 normal = normalize(world_normal.Sample(samp, uv).xyz * 2.0 - 1.0);
     float3 albedo = albedo_roughness.Sample(samp, uv).rgb;
+    float3 emission = emission_metallic.Sample(samp, uv).rgb;
     float metallic = emission_metallic.Sample(samp, uv).a;
     float roughness = albedo_roughness.Sample(samp, uv).a;
 
@@ -90,7 +91,7 @@ float4 main(PSInput input) : SV_TARGET {
     float3 specular_ibl = prefiltered_color * F_ibl;
     float3 indirect_lighting = exp2(ibl_exposure_ev) * (diffuse_ibl + specular_ibl);
 
-    float3 Lo = indirect_lighting;
+    float3 Lo = emission + indirect_lighting;
 
     return float4(Lo, 1.0f);
 }

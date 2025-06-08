@@ -17,7 +17,7 @@ struct Material {
     MaterialId id;
 
     DirectX::XMFLOAT3 albedo_color;
-    DirectX::XMFLOAT3 emission_color;
+    float emission_intensity;
     float metallic_value;
     float roughness_value;
 
@@ -34,7 +34,7 @@ struct Material {
 
 namespace material {
 
-MaterialId create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, float metallic_value, Id metallic_texture, float roughness_value, Id roughness_texture, Id normal_texture, DirectX::XMFLOAT3 emission_color, Id emission_texture);
+MaterialId create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, float metallic_value, Id metallic_texture, float roughness_value, Id roughness_texture, Id normal_texture, float emission_inensity, Id emission_texture);
 Material *get(Renderer *renderer, MaterialId material_id);
 void bind(Renderer *renderer, Material *material, uint8_t start_slot);
 

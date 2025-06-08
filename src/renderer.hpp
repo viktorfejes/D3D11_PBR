@@ -36,10 +36,11 @@ struct alignas(16) CBPerObject {
 };
 
 struct alignas(16) CBPerMaterial {
-    DirectX::XMFLOAT3 albedo_color;     // 12 bytes
-    float metallic_value;               // 4 bytes -> float4 boundary
-    DirectX::XMFLOAT3 emission_color;   // 12 bytes
-    float roughness_value;              // 4 bytes -> float4 boundary
+    DirectX::XMFLOAT3 albedo_color;
+    float metallic_value;
+    float emission_intensity;
+    float roughness_value;
+    float _padding[2];
 };
 
 struct FSVertex {

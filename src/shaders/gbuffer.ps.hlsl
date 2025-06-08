@@ -11,7 +11,7 @@ SamplerState linearSampler : register(s0);
 cbuffer PerMaterialConstants : register(b0) {
     float3 albedoColor;
     float metallicValue;
-    float3 emissionColor;
+    float emissionIntensity;
     float roughnessValue;
 };
 
@@ -59,7 +59,7 @@ PSOutput main(VSOutput input) {
     // World-space normal (RGB)
     output.rt1 = float4(encodedNormal, 1.0);
     // Emission color (RGB) + Metallic (A)
-    output.rt2 = float4(emissionColor, metallic);
+    output.rt2 = float4(emissionIntensity * emissionTexture.Sample(linearSampler, uv).rgb, metallic);
 
     return output;
 }

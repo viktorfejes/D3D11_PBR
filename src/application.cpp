@@ -189,17 +189,12 @@ bool application::deserialize_config() {
         cJSON *albedo_color = cJSON_GetObjectItem(mat, "albedo");
         float roughness = cJSON_GetObjectItem(mat, "roughness")->valuedouble;
         float metallic = cJSON_GetObjectItem(mat, "metallic")->valuedouble;
-        cJSON *emission_obj = cJSON_GetObjectItem(mat, "emission");
+        float emission_intensity = cJSON_GetObjectItem(mat, "emission")->valuedouble;
 
         DirectX::XMFLOAT3 albedo(
             cJSON_GetArrayItem(albedo_color, 0)->valuedouble,
             cJSON_GetArrayItem(albedo_color, 1)->valuedouble,
             cJSON_GetArrayItem(albedo_color, 2)->valuedouble, );
-
-        DirectX::XMFLOAT3 emission_color(
-            cJSON_GetArrayItem(emission_obj, 0)->valuedouble,
-            cJSON_GetArrayItem(emission_obj, 1)->valuedouble,
-            cJSON_GetArrayItem(emission_obj, 2)->valuedouble, );
 
         Id mat_id = material::create(
             albedo,
@@ -209,7 +204,7 @@ bool application::deserialize_config() {
             roughness,
             idmap::get(&tex_map, cJSON_GetObjectItem(mat, "roughness_map")->valueint),
             idmap::get(&tex_map, cJSON_GetObjectItem(mat, "normal_map")->valueint),
-            emission_color,
+            emission_intensity,
             idmap::get(&tex_map, cJSON_GetObjectItem(mat, "emission_map")->valueint));
 
         idmap::add(&mat_map, id, mat_id);

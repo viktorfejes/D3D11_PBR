@@ -76,7 +76,7 @@ float4 main(PSInput input) : SV_TARGET {
     float3 tex = scene_color.Sample(samp, input.uv).rgb;
     float3 b_tex = bloom_tex.Sample(samp, input.uv).rgb;
     float3 composite = tex + b_tex;
-    return float4(LinearToSRGB_Polynomial(ACESFilm(composite)), 1.0f);
+    return float4(LinearToSRGB_Polynomial(Uncharted2(composite)), 1.0f);
 }
 
 
