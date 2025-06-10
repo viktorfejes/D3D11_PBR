@@ -115,30 +115,37 @@ MeshId mesh::load(const char *filename) {
         cgltf_accessor_read_float(nor, i, vn, 3);
         cgltf_accessor_read_float(uvs, i, vt, 2);
 
+        // NOTE: Negative here is to flip to LH from RH
         if (tan) {
             cgltf_accessor_read_float(tan, i, vtan, 4);
             vertices[i].tangent.x = vtan[0];
             vertices[i].tangent.y = vtan[1];
-            vertices[i].tangent.z = vtan[2];
-            vertices[i].tangent.w = vtan[3];
+            vertices[i].tangent.z = -vtan[2];
+            vertices[i].tangent.w = -vtan[3];
         }
 
         vertices[i].position.x = vp[0];
         vertices[i].position.y = vp[1];
-        vertices[i].position.z = vp[2];
+        vertices[i].position.z = -vp[2];
 
         vertices[i].normal.x = vn[0];
         vertices[i].normal.y = vn[1];
-        vertices[i].normal.z = vn[2];
+        vertices[i].normal.z = -vn[2];
 
         vertices[i].texCoord.x = vt[0];
         vertices[i].texCoord.y = vt[1];
     }
 
     // Now we copy the indices (maybe later I can do memcpy)
-    for (cgltf_size i = 0; i < index_count; ++i) {
-        cgltf_size index = cgltf_accessor_read_index(ind, i);
-        indices[i] = static_cast<uint32_t>(index);
+    for (cgltf_size i = 0; i < index_count; i += 3) {
+        // NOTE: We flip the winding to be LH, because glTF is RH
+        uint32_t i0 = static_cast<uint32_t>(cgltf_accessor_read_index(ind, i + 0));
+        uint32_t i1 = static_cast<uint32_t>(cgltf_accessor_read_index(ind, i + 1));
+        uint32_t i2 = static_cast<uint32_t>(cgltf_accessor_read_index(ind, i + 2));
+
+        indices[i + 0] = i0;
+        indices[i + 1] = i2;
+        indices[i + 2] = i1;
     }
 
     cgltf_free(gltf_data);

@@ -26,6 +26,10 @@ struct PSInput {
 };
 
 float4 main(PSInput input) : SV_TARGET {
+    // Some hardcoded value for now for coat
+    float clear_coat = 0.0;
+    float cc_roughness = 0.6;
+    /*------------------------------------------------------*/
     float2 uv = input.uv;
 
     // =======================================================
@@ -49,7 +53,7 @@ float4 main(PSInput input) : SV_TARGET {
     float3 albedo = albedo_roughness.Sample(samp, uv).rgb;
     float3 emission = emission_metallic.Sample(samp, uv).rgb;
     float metallic = emission_metallic.Sample(samp, uv).a;
-    float roughness = albedo_roughness.Sample(samp, uv).a;
+    float roughness = max(albedo_roughness.Sample(samp, uv).a, 0.04);
 
     // View Vector
     float3 V = normalize(camera_position - world_position);
@@ -71,11 +75,11 @@ float4 main(PSInput input) : SV_TARGET {
     // =======================================================
     // INDIRECT LIGHTING
     // =======================================================
-    float3 irradiance = irradiance_tex.Sample(samp, normal).rgb;
+    float3 irradiance = irradiance_tex.Sample(samp, float3(-normal.x, normal.y, normal.z)).rgb;
 
-    float max_reflection_LOD = 4.0;
+    float max_reflection_LOD = 4.0; // This is mip - 1 iirc
     float mip_level = roughness * max_reflection_LOD;
-    float3 prefiltered_color = prefilter_map.SampleLevel(samp, R, mip_level).rgb;
+    float3 prefiltered_color = prefilter_map.SampleLevel(samp, float3(-R.x, R.y, R.z), mip_level).rgb;
 
     // Fresnel for IBL
     float2 brdf_sample = brdf_lut.Sample(samp, float2(NdotV, roughness)).rg;
@@ -89,7 +93,19 @@ float4 main(PSInput input) : SV_TARGET {
     // Combine diffuse and specular IBL
     float3 diffuse_ibl = kD * albedo * irradiance;
     float3 specular_ibl = prefiltered_color * F_ibl;
-    float3 indirect_lighting = exp2(ibl_exposure_ev) * (diffuse_ibl + specular_ibl);
+
+    /*------------------------------------------------------*/
+    // Hopefully, coat?
+    float mip_level_cc = cc_roughness * max_reflection_LOD;
+    float3 prefiltered_cc = prefilter_map.SampleLevel(samp, float3(-R.x, R.y, R.z), mip_level_cc).rgb;
+    float Fc = clear_coat * (0.04 + (1.0 - 0.04) * pow(1.0 - NdotV, 5.0));
+    float3 specular_coat = prefiltered_cc * Fc;
+    // Account for coat?
+    diffuse_ibl *= (1.0 - Fc);
+    specular_ibl *= (1.0 - Fc);
+    /*------------------------------------------------------*/
+    
+    float3 indirect_lighting = exp2(ibl_exposure_ev) * (diffuse_ibl + specular_ibl + specular_coat);
 
     float3 Lo = emission + indirect_lighting;
 

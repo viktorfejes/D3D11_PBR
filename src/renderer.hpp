@@ -11,14 +11,11 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-#define MAX_MESHES 16
-#define MAX_MATERIALS 16
+#define MAX_MESHES 32
+#define MAX_MATERIALS 32
 #define MAX_TEXTURES 64
 
-// NOTE: Should be 16 byte aligned
 struct alignas(16) CBPerFrame {
-    // DirectX::XMFLOAT4X4 view_matrix;
-    // DirectX::XMFLOAT4X4 projection_matrix;
     DirectX::XMFLOAT4X4 viewProjectionMatrix;
     DirectX::XMFLOAT3 camera_position;
     float padding[13];
@@ -38,8 +35,8 @@ struct alignas(16) CBPerObject {
 struct alignas(16) CBPerMaterial {
     DirectX::XMFLOAT3 albedo_color;
     float metallic_value;
-    float emission_intensity;
     float roughness_value;
+    float emission_intensity;
     float _padding[2];
 };
 
@@ -160,6 +157,14 @@ struct Renderer {
     PipelineId lighting_pass_pipeline;
     Microsoft::WRL::ComPtr<ID3D11Buffer> lp_cb_ptr;
     TextureId lighting_rt;
+
+    // Depth prepass (Forward+)
+    PipelineId zpass_pipeline;
+    TextureId z_depth;
+
+    // Opaque pass (Forward+)
+    PipelineId fp_opaque_pipeline;
+    TextureId fp_opaque_color;
 };
 
 namespace renderer {
@@ -175,6 +180,8 @@ PipelineId create_fxaa_pipeline(Renderer *renderer);
 PipelineId create_skybox_pipeline(Renderer *renderer);
 PipelineId create_gbuffer_pipeline(Renderer *renderer);
 PipelineId create_lighting_pass_pipeline(Renderer *renderer);
+PipelineId create_depth_prepass(Renderer *renderer);
+PipelineId create_forward_plus_opaque(Renderer *renderer);
 
 void begin_frame(Renderer *renderer);
 void end_frame(Renderer *renderer);
@@ -187,6 +194,8 @@ void render_bloom_pass(Renderer *renderer);
 void render_fxaa_pass(Renderer *renderer);
 void render_tonemap_pass(Renderer *renderer);
 void render_skybox(Renderer *renderer, SceneCamera *camera);
+void render_depth_prepass(Renderer *renderer, Scene *scene);
+void render_forward_plus_opaque(Renderer *renderer, Scene *scene);
 
 void bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv);
 void clear_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv, float *clear_color);

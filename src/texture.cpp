@@ -18,7 +18,7 @@ struct FormatBindingInfo {
     DXGI_FORMAT srv_format;
 };
 
-static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_size, DXGI_FORMAT format, uint32_t bind_flags, bool is_cubemap, bool generate_srv, const void *data, uint32_t row_pitch);
+static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_size, DXGI_FORMAT format, uint32_t bind_flags, bool is_cubemap, bool generate_srv, uint32_t msaa_samples, const void *data, uint32_t row_pitch);
 static FormatBindingInfo get_format_binding_info(DXGI_FORMAT format);
 
 TextureId texture::load(const char *filename, bool is_srgb) {
@@ -38,6 +38,7 @@ TextureId texture::load(const char *filename, bool is_srgb) {
                                true,
                                image_data,
                                w * 4,
+                               1,
                                1,
                                1,
                                false);
@@ -62,6 +63,7 @@ TextureId texture::load_hdr(const char *filename) {
                                true,
                                hdr_data,
                                w * 3 * sizeof(float),
+                               1,
                                1,
                                1,
                                false);
@@ -146,6 +148,7 @@ TextureId texture::create(uint16_t width,
                           uint32_t row_pitch,
                           uint32_t array_size,
                           uint32_t mip_levels,
+                          uint32_t msaa_samples,
                           bool is_cubemap) {
     // Get a pointer to the renderer as that is our registry for textures.
     // Textures currently only exist as GPU data, so it makes sense. For now
@@ -173,6 +176,7 @@ TextureId texture::create(uint16_t width,
                                  format,
                                  bind_flags,
                                  is_cubemap, generate_srv,
+                                 msaa_samples,
                                  initial_data, row_pitch)) {
         id::invalidate(&t->id);
         return id::invalid();
@@ -208,6 +212,7 @@ bool texture::resize(TextureId id, uint16_t width, uint16_t height) {
                                  t->format,
                                  t->bind_flags,
                                  t->is_cubemap, t->has_srv,
+                                 t->msaa_samples,
                                  NULL, 0)) {
         return false;
     }
@@ -230,7 +235,21 @@ Texture *texture::get(Renderer *renderer, TextureId id) {
     return t;
 }
 
-static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_size, DXGI_FORMAT format, uint32_t bind_flags, bool is_cubemap, bool generate_srv, const void *data, uint32_t row_pitch) {
+static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_size, DXGI_FORMAT format, uint32_t bind_flags, bool is_cubemap, bool generate_srv, uint32_t msaa_samples, const void *data, uint32_t row_pitch) {
+    if (msaa_samples > 1) {
+        // Multisampled textures cannot have mipmaps
+        if (mip_levels > 1) {
+            LOG("%s: MSAA textures can't have mipmaps", __func__);
+            return false;
+        }
+        
+        // UAVs are not supported on multisampled texture
+        if (bind_flags & D3D11_BIND_UNORDERED_ACCESS) {
+            LOG("%s: UAVs are not supported on multisampled textures", __func__);
+            return false;
+        }
+    }
+
     // In case it's a depth texture that should be an SRV as well
     bool depth_srv = (bind_flags & D3D11_BIND_DEPTH_STENCIL) && generate_srv;
     FormatBindingInfo depth_srv_format = get_format_binding_info(format);
@@ -243,10 +262,23 @@ static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint
     desc.ArraySize = array_size;
     desc.Format = depth_srv ? depth_srv_format.texture_format : format;
     desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = bind_flags;
     if (is_cubemap) {
         desc.MiscFlags |= D3D11_RESOURCE_MISC_TEXTURECUBE;
+    }
+
+    // Check MSAA availability
+    UINT quality_levels = 0;
+    if (msaa_samples > 1) {
+        device->CheckMultisampleQualityLevels(format, msaa_samples, &quality_levels);
+        if (quality_levels == 0) {
+            LOG("%s: MSAA %ux not supported for format", __func__, msaa_samples);
+            return false;
+        }
+        desc.SampleDesc.Count = msaa_samples;
+        desc.SampleDesc.Quality = quality_levels - 1;
     }
 
     // Initial data
@@ -276,13 +308,13 @@ static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint
             srv_desc.TextureCube.MipLevels = mip_levels;
             srv_desc.TextureCube.MostDetailedMip = 0;
         } else if (array_size > 1) {
-            srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+            srv_desc.ViewDimension = (msaa_samples > 1) ? D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY : D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
             srv_desc.Texture2DArray.MipLevels = mip_levels;
             srv_desc.Texture2DArray.ArraySize = array_size;
             srv_desc.Texture2DArray.FirstArraySlice = 0;
             srv_desc.Texture2DArray.MostDetailedMip = 0;
         } else {
-            srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srv_desc.ViewDimension = (msaa_samples > 1) ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
             srv_desc.Texture2D.MipLevels = mip_levels;
             srv_desc.Texture2D.MostDetailedMip = 0;
         }
@@ -330,12 +362,12 @@ static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint
             rtv_desc.Format = format;
 
             if (array_size > 1) {
-                rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+                rtv_desc.ViewDimension = (msaa_samples > 1) ? D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY : D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
                 rtv_desc.Texture2DArray.MipSlice = 0;
                 rtv_desc.Texture2DArray.ArraySize = 1;
                 rtv_desc.Texture2DArray.FirstArraySlice = i;
             } else {
-                rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+                rtv_desc.ViewDimension = (msaa_samples > 1) ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
                 rtv_desc.Texture2D.MipSlice = 0;
             }
 
@@ -351,7 +383,7 @@ static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint
     if (bind_flags & D3D11_BIND_DEPTH_STENCIL) {
         D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
         dsv_desc.Format = depth_srv ? depth_srv_format.dsv_format : format;
-        dsv_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+        dsv_desc.ViewDimension = (msaa_samples > 1) ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
 
         // Create the DSV
         hr = device->CreateDepthStencilView((ID3D11Resource *)texture->texture.Get(), &dsv_desc, texture->dsv.GetAddressOf());

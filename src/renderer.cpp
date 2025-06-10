@@ -10,6 +10,7 @@
 
 #include <DirectXMath.h>
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <d3dcompiler.h>
 #include <dxgiformat.h>
 
@@ -329,6 +330,20 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         return false;
     }
 
+    // Create Depth Prepass for Forward+ rendering
+    renderer->zpass_pipeline = create_depth_prepass(renderer);
+    if (id::is_invalid(renderer->zpass_pipeline)) {
+        LOG("%s: Couldn't create depth prepass shader pipeline", __func__);
+        return false;
+    }
+
+    // Create Opaque Shading pass for Forward+ rendering
+    renderer->fp_opaque_pipeline = create_forward_plus_opaque(renderer);
+    if (id::is_invalid(renderer->fp_opaque_pipeline)) {
+        LOG("%s: Couldn't create Opaque shader pipeline for Forward+", __func__);
+        return false;
+    }
+
     // Set the viewport
     D3D11_VIEWPORT vp;
     vp.Width = (FLOAT)pWindow->width;
@@ -346,14 +361,14 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, false);
+        1, 1, 1, false);
     renderer->scene_depth = texture::create(
         pWindow->width, pWindow->height,
         DXGI_FORMAT_D24_UNORM_S8_UINT,
         D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, false);
+        1, 1, 1, false);
 
     // Create textures for bloom pass
     UINT mip_width = pWindow->width / 2;
@@ -366,7 +381,7 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
             D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
             true,
             nullptr, 0,
-            1, 1, false);
+            1, 1, 1, false);
 
         if (id::is_invalid(renderer->bloom_mips[i])) {
             LOG("Renderer error: Couldn't create bloomp mip texture %d", i);
@@ -397,7 +412,7 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, false);
+        1, 1, 1, false);
     if (id::is_invalid(renderer->fxaa_color)) {
         LOG("Renderer error: Couldn't initialize texture for FXAA pass");
         return false;
@@ -715,7 +730,7 @@ PipelineId renderer::create_gbuffer_pipeline(Renderer *renderer) {
         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, false);
+        1, 1, 1, false);
     // World-space normal (RGB)
     renderer->gbuffer_rt1 = texture::create(
         renderer->pWindow->width, renderer->pWindow->height,
@@ -723,7 +738,7 @@ PipelineId renderer::create_gbuffer_pipeline(Renderer *renderer) {
         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, false);
+        1, 1, 1, false);
     // Emission color (RGB) + Metallic (A)
     renderer->gbuffer_rt2 = texture::create(
         renderer->pWindow->width, renderer->pWindow->height,
@@ -731,7 +746,7 @@ PipelineId renderer::create_gbuffer_pipeline(Renderer *renderer) {
         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, false);
+        1, 1, 1, false);
 
     return gbuffer_pipeline;
 }
@@ -771,9 +786,92 @@ PipelineId renderer::create_lighting_pass_pipeline(Renderer *renderer) {
         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, false);
+        1, 1, 1, false);
 
     return lighting_pass_pipeline;
+}
+
+PipelineId renderer::create_depth_prepass(Renderer *renderer) {
+    ShaderId zpass_vs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/zpass.vs.hlsl",
+        SHADER_STAGE_VS,
+        "main");
+
+    if (id::is_invalid(zpass_vs)) {
+        LOG("%s: Couldn't create shader module for Z-pass vertex shader", __func__);
+        return id::invalid();
+    }
+
+    // Define the pbr input layout
+    D3D11_INPUT_ELEMENT_DESC zpass_input_desc[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+
+    ShaderId zpass_modules[] = {zpass_vs};
+
+    PipelineId zpass_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        zpass_modules,
+        ARRAYSIZE(zpass_modules),
+        zpass_input_desc, ARRAYSIZE(zpass_input_desc));
+
+    if (id::is_invalid(zpass_pipeline)) {
+        LOG("%s: Couldn't create shader pipeline for Depth Prepass", __func__);
+        return id::invalid();
+    }
+
+    // Create Depth Texture for Z-prepass
+    renderer->z_depth = texture::create(
+        renderer->pWindow->width, renderer->pWindow->height,
+        DXGI_FORMAT_D24_UNORM_S8_UINT,
+        D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE,
+        true,
+        nullptr, 0,
+        1, 1, 1, false);
+
+    return zpass_pipeline;
+}
+
+PipelineId renderer::create_forward_plus_opaque(Renderer *renderer) {
+    ShaderId fp_opaque_vs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/fp_opaque.vs.hlsl",
+        SHADER_STAGE_VS,
+        "main");
+    ShaderId fp_opaque_ps = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        L"src/shaders/fp_opaque.ps.hlsl",
+        SHADER_STAGE_PS,
+        "main");
+
+    // Define the fp_opaque input layout
+    D3D11_INPUT_ELEMENT_DESC fp_opaque_input_desc[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+
+    // Modules in the PBR pipeline
+    ShaderId fp_opaque_modules[] = {fp_opaque_vs, fp_opaque_ps};
+
+    PipelineId fp_opaque_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->pDevice.Get(),
+        fp_opaque_modules,
+        ARRAYSIZE(fp_opaque_modules),
+        fp_opaque_input_desc,
+        ARRAYSIZE(fp_opaque_input_desc));
+
+    return fp_opaque_pipeline;
 }
 
 void renderer::begin_frame(Renderer *renderer) {
@@ -814,17 +912,19 @@ void renderer::render(Renderer *renderer, Scene *scene) {
     // Rendering scene - meshes, materials...etc.
     // render_scene(renderer, scene);
 
-    // WARNING: Test render for gbuffer
-    render_gbuffer(renderer, scene);
+    // Forward+ rendering
+    render_depth_prepass(renderer, scene);
+    render_forward_plus_opaque(renderer, scene);
 
-    // WARNING: Test render for lighting pass
+    // Deferred rendering
+    render_gbuffer(renderer, scene);
     render_lighting_pass(renderer, scene);
 
     // Render the environment map
     render_skybox(renderer, scene->active_cam);
 
     // Render FXAA pass
-    render_fxaa_pass(renderer);
+    // render_fxaa_pass(renderer);
 
     // Render bloom pass
     render_bloom_pass(renderer);
@@ -1066,8 +1166,8 @@ void renderer::render_bloom_pass(Renderer *renderer) {
     // For convenience but could be useful to bypass some dereferencing as well
     ID3D11DeviceContext *context = renderer->pContext.Get();
 
-    // ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->scene_color.id].srv.Get();
-    ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->fxaa_color.id].srv.Get();
+    ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->scene_color.id].srv.Get();
+    // ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->fxaa_color.id].srv.Get();
 
     // 1. Threshold pass
     D3D11_MAPPED_SUBRESOURCE mapped;
@@ -1208,7 +1308,8 @@ void renderer::render_tonemap_pass(Renderer *renderer) {
     // context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Bind previous render target as texture
-    Texture *scene_color_tex = &renderer->textures[renderer->fxaa_color.id];
+    // Texture *scene_color_tex = &renderer->textures[renderer->fxaa_color.id];
+    Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
     Texture *bloom_tex = &renderer->textures[renderer->bloom_mips[0].id];
     ID3D11ShaderResourceView *srvs[] = {scene_color_tex->srv.Get(), bloom_tex->srv.Get()};
     renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -1278,6 +1379,141 @@ void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
     renderer->pContext->RSSetState(renderer->default_raster.Get());
 }
 
+void renderer::render_depth_prepass(Renderer *renderer, Scene *scene) {
+    // TODO: Move this into the render context so can be called again and again for debug
+    ID3DUserDefinedAnnotation *annotation = nullptr;
+    renderer->pContext->QueryInterface(__uuidof(ID3DUserDefinedAnnotation), (void **)&annotation);
+    annotation->BeginEvent(L"Depth Prepass");
+
+    // Bind the pipeline
+    ShaderPipeline *zpass_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->zpass_pipeline);
+    shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), zpass_pipeline);
+
+    // Set some of the states...
+    renderer->pContext->OMSetDepthStencilState(renderer->pDepthStencilState.Get(), 0);
+    renderer->pContext->RSSetState(renderer->default_raster.Get());
+
+    // Update per frame constants
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    HRESULT hr = renderer->pContext->Map(renderer->pCBPerFrame.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to map per object constant buffer");
+        return;
+    }
+    // TODO: At one point I will have to NOT repeat Per Frame CB's...!
+    CBPerFrame *perFramePtr = (CBPerFrame *)mappedResource.pData;
+    perFramePtr->viewProjectionMatrix = scene::camera_get_view_projection_matrix(scene->active_cam);
+    perFramePtr->camera_position = scene->active_cam->position;
+    renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
+    renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
+
+    // Bind the depth texture
+    Texture *depth = texture::get(renderer, renderer->z_depth);
+    renderer->pContext->ClearDepthStencilView(depth->dsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+    renderer->pContext->OMSetRenderTargets(0, nullptr, depth->dsv.Get());
+
+    // Render meshes
+    for (int i = 0; i < MAX_SCENE_MESHES; ++i) {
+        SceneMesh *mesh = &scene->meshes[i];
+
+        if (id::is_invalid(mesh->id))
+            continue;
+
+        // Lookup the mesh gpu resource through the mesh_id
+        Mesh *gpu_mesh = mesh::get(renderer, mesh->mesh_id);
+        if (!gpu_mesh) {
+            continue;
+        }
+
+        // Bind mesh instance
+        scene::bind_mesh_instance(renderer, scene, mesh->id, 1);
+
+        // Draw the mesh
+        mesh::draw(renderer->pContext.Get(), gpu_mesh);
+    }
+
+    // Unbind RTV's
+    ID3D11RenderTargetView *nullRTVs[8] = {nullptr};
+    renderer->pContext->OMSetRenderTargets(_countof(nullRTVs), nullRTVs, nullptr);
+
+    annotation->EndEvent();
+}
+
+void renderer::render_forward_plus_opaque(Renderer *renderer, Scene *scene) {
+    renderer->pContext->OMSetDepthStencilState(renderer->skybox_depth_state.Get(), 0);
+
+    // Update per frame constant buffer
+    D3D11_MAPPED_SUBRESOURCE mappedResource;
+    HRESULT hr = renderer->pContext->Map(renderer->pCBPerFrame.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to map per object constant buffer");
+        return;
+    }
+    CBPerFrame *perFramePtr = (CBPerFrame *)mappedResource.pData;
+    perFramePtr->viewProjectionMatrix = scene::camera_get_view_projection_matrix(scene->active_cam);
+    perFramePtr->camera_position = scene->active_cam->position;
+    renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
+    renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
+
+    // Bind the PBR shader
+    ShaderPipeline *fp_opaque_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->fp_opaque_pipeline);
+    shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), fp_opaque_pipeline);
+
+    // Grab the irradiance map
+    Texture *irradiance_tex = &renderer->textures[renderer->irradiance_cubemap.id];
+    // Grab the prefilter map
+    Texture *prefilter_tex = &renderer->textures[renderer->prefilter_map.id];
+    // Grab the BRDF LUT
+    Texture *brdf_lut_tex = &renderer->textures[renderer->brdf_lut.id];
+    ID3D11ShaderResourceView *env_srvs[] = {irradiance_tex->srv.Get(), prefilter_tex->srv.Get(), brdf_lut_tex->srv.Get()};
+    if (prefilter_tex && irradiance_tex && brdf_lut_tex) {
+        renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(env_srvs), env_srvs);
+    }
+
+    // Bind the RTV
+    Texture *scene_rt = texture::get(renderer, renderer->scene_color);
+    Texture *depth = texture::get(renderer, renderer->z_depth);
+    if (!scene_rt) return;
+    renderer->pContext->OMSetRenderTargets(1, scene_rt->rtv[0].GetAddressOf(), depth->dsv.Get());
+
+    // Loop through our meshes from our selected scene
+    MaterialId current_material_bound = id::invalid();
+    for (int i = 0; i < MAX_SCENE_MESHES; ++i) {
+        SceneMesh *mesh = &scene->meshes[i];
+        if (id::is_invalid(mesh->id))
+            continue;
+
+        // If the material id is different from the currently bound
+        // bind the new one.
+        if (mesh->material_id.id != current_material_bound.id) {
+            // Get the material
+            Material *mat = material::get(renderer, mesh->material_id);
+            if (!mat) {
+                LOG("%s: Warning! Material couldn't be fetched", __func__);
+                continue;
+            }
+
+            // Bind the material's values and textures
+            material::bind(renderer, mat, ARRAYSIZE(env_srvs));
+
+            // Update the currently bound material
+            current_material_bound = mat->id;
+        }
+
+        // Lookup the mesh gpu resource through the mesh_id
+        Mesh *gpu_mesh = mesh::get(renderer, mesh->mesh_id);
+        if (!gpu_mesh) {
+            continue;
+        }
+
+        // Bind mesh instance
+        scene::bind_mesh_instance(renderer, scene, mesh->id, 1);
+
+        // Draw the mesh
+        mesh::draw(renderer->pContext.Get(), gpu_mesh);
+    }
+}
+
 void renderer::bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv) {
     renderer->pContext->OMSetRenderTargets(1, &rtv, dsv);
 }
@@ -1302,7 +1538,7 @@ bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
         D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
         true,
         nullptr, 0,
-        6, 1, true);
+        6, 1, 1, true);
 
     // Create Constant Buffer for conversion
     D3D11_BUFFER_DESC cb_desc = {};
@@ -1392,7 +1628,7 @@ bool renderer::generate_irradiance_cubemap(Renderer *renderer) {
         0,
         6,
         1,
-        true);
+        1, true);
     Texture *irradiance_tex = &renderer->textures[renderer->irradiance_cubemap.id];
 
     ShaderId irradiance_ps = shader::create_module_from_file(
@@ -1491,7 +1727,7 @@ bool renderer::generate_IBL_prefilter(Renderer *renderer, uint32_t total_mips) {
         true,
         nullptr, 0,
         6, total_mips,
-        true);
+        1, true);
 
     // Create constant buffer
     struct CBIBLPrefilter {
@@ -1604,7 +1840,7 @@ bool renderer::generate_BRDF_LUT(Renderer *renderer) {
         true,
         nullptr, 0,
         1, 1,
-        false);
+        1, false);
 
     // Bind shaders
     ShaderPipeline *brdf_lut_pipeline = shader::get_pipeline(&renderer->shader_system, brdf_lut_shader);

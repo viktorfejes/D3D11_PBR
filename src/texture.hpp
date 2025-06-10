@@ -19,6 +19,7 @@ struct Texture {
     uint32_t bind_flags;
     uint32_t mip_levels;
     uint32_t array_size;
+    uint32_t msaa_samples;
     bool is_cubemap;
     bool has_srv;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
@@ -42,6 +43,7 @@ TextureId create(uint16_t width,
                  uint32_t row_pitch,
                  uint32_t array_size,
                  uint32_t mip_levels,
+                 uint32_t msaa_samples,
                  bool is_cubemap);
 bool resize(TextureId id, uint16_t width, uint16_t height);
 Texture *get(Renderer *renderer, TextureId id);
