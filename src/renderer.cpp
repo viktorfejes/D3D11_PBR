@@ -21,6 +21,25 @@
 #define MAX(a, b) (a > b ? a : b)
 #endif
 
+#define UNUSED(x) (void)(x)
+
+#ifdef _DEBUG
+#define BEGIN_D3D11_EVENT(renderer, lname)         \
+    if ((renderer) && (renderer)->annotation) {    \
+        (renderer)->annotation->BeginEvent(lname); \
+    }
+#define END_D3D11_EVENT(renderer)               \
+    if ((renderer) && (renderer)->annotation) { \
+        (renderer)->annotation->EndEvent();     \
+    }
+#else
+#define BEGIN_D3D11_EVENT(renderer, lname) UNUSED(renderer)
+#define END_D3D11_EVENT(renderer) UNUSED(renderer)
+#endif
+
+// TEMP: Only for the video...
+static uint32_t debug_flag = 0;
+
 // Static functions
 static bool create_default_shaders(Renderer *renderer);
 
@@ -70,6 +89,11 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     if (FAILED(hr)) {
         LOG("D3D11CreateDeviceAndSwapChain failed.");
         return false;
+    }
+
+    hr = renderer->pContext->QueryInterface(IID_PPV_ARGS(&renderer->annotation));
+    if (FAILED(hr)) {
+        LOG("%s: Couldn't query the annotation interface", __func__);
     }
 
     // We need to get the back buffer
@@ -764,6 +788,21 @@ PipelineId renderer::create_lighting_pass_pipeline(Renderer *renderer) {
         return id::invalid();
     }
 
+    /* -------------------------------------------------------- */
+    // TEMP:
+    D3D11_BUFFER_DESC debug_cb = {};
+    debug_cb.Usage = D3D11_USAGE_DYNAMIC;
+    debug_cb.ByteWidth = sizeof(CBDebug);
+    debug_cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    debug_cb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    hr = renderer->pDevice->CreateBuffer(&debug_cb, nullptr, renderer->debug_cb_ptr.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("Renderer error: Failed to create constant buffer for debug settings");
+        return id::invalid();
+    }
+    /* -------------------------------------------------------- */
+
     ShaderId lighting_pass_ps = shader::create_module_from_file(
         &renderer->shader_system,
         renderer->pDevice.Get(),
@@ -1006,6 +1045,8 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
 }
 
 void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
+    BEGIN_D3D11_EVENT(renderer, L"G-buffer Pass (Deferred)");
+
     // Bind the pipeline
     ShaderPipeline *gbuffer_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->gbuffer_pipeline);
     shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), gbuffer_pipeline);
@@ -1087,9 +1128,13 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
     // Unbind RTV's
     ID3D11RenderTargetView *nullRTVs[8] = {nullptr};
     renderer->pContext->OMSetRenderTargets(_countof(nullRTVs), nullRTVs, nullptr);
+
+    END_D3D11_EVENT(renderer);
 }
 
 void renderer::render_lighting_pass(Renderer *renderer, Scene *scene) {
+    BEGIN_D3D11_EVENT(renderer, L"Lighting Pass (Deferred)");
+
     ID3D11DeviceContext *context = renderer->pContext.Get();
 
     // Bind the pipeline
@@ -1148,18 +1193,30 @@ void renderer::render_lighting_pass(Renderer *renderer, Scene *scene) {
     context->Unmap(renderer->lp_cb_ptr.Get(), 0);
     context->PSSetConstantBuffers(0, 1, renderer->lp_cb_ptr.GetAddressOf());
 
+    /* TEMP: ----------------------------------------------- */
+    D3D11_MAPPED_SUBRESOURCE debug_map;
+    context->Map(renderer->debug_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &debug_map);
+    ((CBDebug *)debug_map.pData)->flag = debug_flag;
+    context->Unmap(renderer->debug_cb_ptr.Get(), 0);
+    context->PSSetConstantBuffers(1, 1, renderer->debug_cb_ptr.GetAddressOf());
+    /* ----------------------------------------------------- */
+
     context->Draw(3, 0);
 
     // Unbind SRVs
     ID3D11ShaderResourceView *nullSRVs[8] = {nullptr};
     context->PSSetShaderResources(0, 8, nullSRVs);
+
+    END_D3D11_EVENT(renderer);
 }
 
 void renderer::render_bloom_pass(Renderer *renderer) {
+    BEGIN_D3D11_EVENT(renderer, L"Bloom Pass");
+
     float clear_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
     BloomConstants bloom_constants = {};
-    bloom_constants.bloom_threshold = 1.5f;
+    bloom_constants.bloom_threshold = 1.0f;
     bloom_constants.bloom_intensity = 1.0f;
     bloom_constants.bloom_knee = 0.2f;
 
@@ -1253,6 +1310,7 @@ void renderer::render_bloom_pass(Renderer *renderer) {
     }
 
     context->OMSetBlendState(renderer->pDefaultBS.Get(), nullptr, 0xFFFFFFFF);
+    END_D3D11_EVENT(renderer);
 }
 
 void renderer::render_fxaa_pass(Renderer *renderer) {
@@ -1380,10 +1438,7 @@ void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
 }
 
 void renderer::render_depth_prepass(Renderer *renderer, Scene *scene) {
-    // TODO: Move this into the render context so can be called again and again for debug
-    ID3DUserDefinedAnnotation *annotation = nullptr;
-    renderer->pContext->QueryInterface(__uuidof(ID3DUserDefinedAnnotation), (void **)&annotation);
-    annotation->BeginEvent(L"Depth Prepass");
+    BEGIN_D3D11_EVENT(renderer, L"Depth Prepass (Forward+)");
 
     // Bind the pipeline
     ShaderPipeline *zpass_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->zpass_pipeline);
@@ -1436,7 +1491,7 @@ void renderer::render_depth_prepass(Renderer *renderer, Scene *scene) {
     ID3D11RenderTargetView *nullRTVs[8] = {nullptr};
     renderer->pContext->OMSetRenderTargets(_countof(nullRTVs), nullRTVs, nullptr);
 
-    annotation->EndEvent();
+    END_D3D11_EVENT(renderer)
 }
 
 void renderer::render_forward_plus_opaque(Renderer *renderer, Scene *scene) {
@@ -1528,8 +1583,9 @@ void renderer::clear_render_target(Renderer *renderer, ID3D11RenderTargetView *r
 }
 
 bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
-    TextureId hdri = texture::load_hdr("assets/photo_studio_loft_hall_4k.hdr");
+    // TextureId hdri = texture::load_hdr("assets/photo_studio_loft_hall_4k.hdr");
     // TextureId hdri = texture::load_hdr("assets/metal_studio_23.hdr");
+    TextureId hdri = texture::load_hdr("assets/autoshop_01_4k_alt.hdr");
     Texture *hdri_tex = &renderer->textures[hdri.id];
 
     renderer->cubemap_id = texture::create(
@@ -1980,6 +2036,10 @@ void renderer::on_window_resize(Renderer *renderer, uint16_t width, uint16_t hei
 
 ID3D11Device *renderer::get_device(Renderer *renderer) {
     return renderer->pDevice.Get();
+}
+
+void renderer::set_debug_flag(GbufferDebugState state) {
+    debug_flag = state;
 }
 
 static bool create_default_shaders(Renderer *renderer) {

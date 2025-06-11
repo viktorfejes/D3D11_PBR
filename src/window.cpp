@@ -208,6 +208,14 @@ static KeyCode VKToKeyCode(WPARAM w_param) {
             return KEY_8;
         case '9':
             return KEY_9;
+        case 'Q':
+            return KEY_Q;
+        case 'W':
+            return KEY_W;
+        case 'E':
+            return KEY_E;
+        case 'R':
+            return KEY_R;
         default:
             return KEY_UNKNOWN;
     }

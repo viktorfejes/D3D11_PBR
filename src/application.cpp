@@ -6,6 +6,7 @@
 #include "logger.hpp"
 #include "material.hpp"
 #include "mesh.hpp"
+#include "renderer.hpp"
 #include "scene.hpp"
 #include "texture.hpp"
 
@@ -68,7 +69,7 @@ void application::shutdown() {
 #define DEG2RAD (DirectX::XM_PI / 180.0f)
 static bool should_rotate = false;
 void application::update() {
-    if (input::is_key_pressed(KEY_0)) {
+    if (input::is_key_pressed(KEY_R)) {
         should_rotate = should_rotate ? false : true;
     }
 
@@ -113,8 +114,36 @@ void application::update() {
     }
 
     if (should_rotate) {
-        DirectX::XMFLOAT3 r = scene::mesh_get_rotation(&pState->scenes[0], main_mesh);
-        scene::mesh_set_rotation(&pState->scenes[0], main_mesh, {r.x + 0.1f, r.y + 0.1f, r.z + 0.1f});
+        float yaw = scene::camera_get_yaw(&pState->scenes[0], pState->scenes[0].active_cam->id);
+        float pitch = scene::camera_get_pitch(&pState->scenes[0], pState->scenes[0].active_cam->id);
+
+        // Apply yaw
+        yaw += 0.8f * 0.01f;
+
+        // Set the new yaw and pitch
+        scene::camera_set_yaw_pitch(&pState->scenes[0], pState->scenes[0].active_cam->id, yaw, pitch);
+    }
+
+    if (input::is_key_pressed(KEY_0)) {
+        renderer::set_debug_flag(GBUFFER_FULL);
+    }
+    if (input::is_key_pressed(KEY_1)) {
+        renderer::set_debug_flag(GBUFFER_ALBEDO);
+    }
+    if (input::is_key_pressed(KEY_2)) {
+        renderer::set_debug_flag(GBUFFER_ROUGHNESS);
+    }
+    if (input::is_key_pressed(KEY_3)) {
+        renderer::set_debug_flag(GBUFFER_NORMAL);
+    }
+    if (input::is_key_pressed(KEY_4)) {
+        renderer::set_debug_flag(GBUFFER_METALLIC);
+    }
+    if (input::is_key_pressed(KEY_5)) {
+        renderer::set_debug_flag(GBUFFER_EMISSIVE);
+    }
+    if (input::is_key_pressed(KEY_6)) {
+        renderer::set_debug_flag(GBUFFER_WORLD_POSITION);
     }
 }
 

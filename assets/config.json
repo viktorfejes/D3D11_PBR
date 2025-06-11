@@ -20,8 +20,8 @@
                     "mesh_id": 2,
                     "material_id": 2,
                     "position": [0.0, 20.0, 0.0],
-                    "rotation": [-90.0, 8.0, 90.0],
-                    "scale": [0.1, 0.1, 0.1]
+                    "rotation": [0.0, 0.0, 0.0],
+                    "scale": [1.0, 1.0, 1.0]
                 }
             ],
             "cameras": [
@@ -48,7 +48,7 @@
         },
         {
             "id": 2,
-            "path": "assets/gameboy.glb"
+            "path": "assets/ferrari.glb"
         }
     ],
     "textures": [
@@ -104,27 +104,27 @@
         },
         {
             "id": 10,
-            "path": "assets/gameboy_tex/Gameboy_low_Gameboy_BaseColor.png",
+            "path": "assets/ferrari/ferrari_hi_Body_BaseColor_sRGB.png",
             "srgb": true
         },
         {
             "id": 11,
-            "path": "assets/gameboy_tex/Gameboy_low_Gameboy_Roughness.png",
+            "path": "assets/ferrari/ferrari_hi_Body_Roughness_Raw.png",
             "srgb": false
         },
         {
             "id": 12,
-            "path": "assets/gameboy_tex/Gameboy_low_Gameboy_Normal.png",
+            "path": "assets/ferrari/ferrari_hi_Body_Normal_Raw.png",
             "srgb": false
         },
         {
             "id": 13,
-            "path": "assets/gameboy_tex/Gameboy_low_Gameboy_Metallic.png",
+            "path": "assets/ferrari/ferrari_hi_Body_Metallic_Raw.png",
             "srgb": false
         },
         {
             "id": 14,
-            "path": "assets/gameboy_tex/Gameboy_low_Gameboy_Emissive.png",
+            "path": "assets/ferrari/ferrari_hi_Body_Emissive_sRGB.png",
             "srgb": true 
         }
     ],
@@ -157,7 +157,7 @@
             "id": 2,
             "albedo": [1.0, 1.0, 1.0],
             "albedo_map": 10,
-            "roughness": 1.0,
+            "roughness": 1.5,
             "roughness_map": 11,
             "metallic": 1.0,
             "metallic_map": 13,

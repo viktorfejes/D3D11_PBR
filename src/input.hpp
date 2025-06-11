@@ -14,6 +14,10 @@ enum KeyCode : uint8_t {
     KEY_7,
     KEY_8,
     KEY_9,
+    KEY_Q,
+    KEY_W,
+    KEY_E,
+    KEY_R,
     KEY_COUNT
 };
 

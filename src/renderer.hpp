@@ -9,11 +9,30 @@
 
 #include <DirectXMath.h>
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <wrl/client.h>
 
 #define MAX_MESHES 32
 #define MAX_MATERIALS 32
 #define MAX_TEXTURES 64
+
+/* TEMP: Switch between GBUFFER visualizations */
+enum GbufferDebugState {
+    GBUFFER_FULL,
+    GBUFFER_ALBEDO,
+    GBUFFER_ROUGHNESS,
+    GBUFFER_NORMAL,
+    GBUFFER_METALLIC,
+    GBUFFER_EMISSIVE,
+    GBUFFER_WORLD_POSITION,
+    GBUFFER_DEBUG_COUNT,
+};
+
+struct alignas(16) CBDebug {
+    uint32_t flag;
+    float _pad[3];
+};
+/* ------------------------------------------- */
 
 struct alignas(16) CBPerFrame {
     DirectX::XMFLOAT4X4 viewProjectionMatrix;
@@ -83,6 +102,7 @@ struct Renderer {
     Microsoft::WRL::ComPtr<ID3D11Device> pDevice;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> pContext;
     Microsoft::WRL::ComPtr<IDXGISwapChain> pSwapChain;
+    Microsoft::WRL::ComPtr<ID3DUserDefinedAnnotation> annotation;
 
     Microsoft::WRL::ComPtr<ID3D11RenderTargetView> pRenderTargetView;
     Microsoft::WRL::ComPtr<ID3D11DepthStencilView> pDepthStencilView;
@@ -165,6 +185,9 @@ struct Renderer {
     // Opaque pass (Forward+)
     PipelineId fp_opaque_pipeline;
     TextureId fp_opaque_color;
+
+    // TEMP:
+    Microsoft::WRL::ComPtr<ID3D11Buffer> debug_cb_ptr;
 };
 
 namespace renderer {
@@ -208,5 +231,7 @@ bool generate_BRDF_LUT(Renderer *renderer);
 void on_window_resize(Renderer *renderer, uint16_t width, uint16_t height);
 
 ID3D11Device *get_device(Renderer *renderer);
+// TEMP:
+void set_debug_flag(GbufferDebugState state);
 
 } // namespace renderer

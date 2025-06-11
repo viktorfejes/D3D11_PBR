@@ -20,6 +20,13 @@ cbuffer CBLighting : register(b0) {
     float _pad0;
 };
 
+cbuffer CBDebug : register(b1) {
+    uint debug_flag;
+    float _pad1;
+    float _pad2; 
+    float _pad3; 
+}
+
 struct PSInput {
     float4 pos : SV_POSITION;
     float2 uv : TEXCOORD0;
@@ -27,8 +34,8 @@ struct PSInput {
 
 float4 main(PSInput input) : SV_TARGET {
     // Some hardcoded value for now for coat
-    float clear_coat = 0.0;
-    float cc_roughness = 0.6;
+    float clear_coat = 1.0;
+    float cc_roughness = 0.03;
     /*------------------------------------------------------*/
     float2 uv = input.uv;
 
@@ -109,7 +116,17 @@ float4 main(PSInput input) : SV_TARGET {
 
     float3 Lo = emission + indirect_lighting;
 
-    return float4(Lo, 1.0f);
+    // TEMP: For debug display!
+    float3 debug_out[7];
+    debug_out[0] = Lo;
+    debug_out[1] = albedo;
+    debug_out[2] = roughness;
+    debug_out[3] = normal;
+    debug_out[4] = metallic;
+    debug_out[5] = emission;
+    debug_out[6] = world_position;
+
+    return float4(debug_out[debug_flag], 1.0f);
 }
 
 
