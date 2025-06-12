@@ -186,6 +186,9 @@ struct Renderer {
     PipelineId fp_opaque_pipeline;
     TextureId fp_opaque_color;
 
+    // Resolved MSAA texture for post
+    TextureId resolved_color;
+
     // TEMP:
     Microsoft::WRL::ComPtr<ID3D11Buffer> debug_cb_ptr;
 };

@@ -111,7 +111,7 @@ float3 F_Sheen(float LdotH, float3 sheenColor) {
 
 float4 main(VS_Output input) : SV_TARGET {
     // TODO: Hardcoding values for coat for now.
-    float clear_coat = 0.0;
+    float clear_coat = 1.0;
     float cc_roughness = 0.01;
     /*-----------------------------------------------------------*/
 
@@ -123,7 +123,7 @@ float4 main(VS_Output input) : SV_TARGET {
     float3 albedo = albedo_color * albedo_tex.Sample(linear_sampler, uv).rgb;
     float metallic = metallic_value * metallic_tex.Sample(linear_sampler, uv).r;
     float roughness = roughness_value * roughness_tex.Sample(linear_sampler, uv).r;
-    float3 emission = emission_tex.Sample(linear_sampler, uv).rgb;
+    float3 emission = emission_intensity * emission_tex.Sample(linear_sampler, uv).rgb;
     float3 normal = normal_tex.Sample(linear_sampler, uv).xyz;
 
     // Base reflectance
@@ -146,8 +146,8 @@ float4 main(VS_Output input) : SV_TARGET {
     float mip_level = roughness * max_reflection_LOD;
 
     // Sample IBL textures
-    float3 irradiance = ibl_irradiance_tex.Sample(linear_sampler, N).rgb;
-    float3 prefiltered_color = ibl_prefilter_tex.SampleLevel(linear_sampler, R, mip_level).rgb;
+    float3 irradiance = ibl_irradiance_tex.Sample(linear_sampler, float3(-N.x, N.y, N.z)).rgb;
+    float3 prefiltered_color = ibl_prefilter_tex.SampleLevel(linear_sampler, float3(-R.x, R.y, R.z), mip_level).rgb;
     float2 brdf_sample = ibl_brdf_lut.Sample(linear_sampler, float2(NdotV, roughness)).rg;
 
     // Specular IBL
@@ -164,7 +164,7 @@ float4 main(VS_Output input) : SV_TARGET {
     /*-----------------------------------------------------------*/
     // Coat implementation
     float mip_level_cc = cc_roughness * max_reflection_LOD;
-    float3 prefiltered_cc = ibl_prefilter_tex.SampleLevel(linear_sampler, R, mip_level_cc).rgb;
+    float3 prefiltered_cc = ibl_prefilter_tex.SampleLevel(linear_sampler, float3(-R.x, R.y, R.z), mip_level_cc).rgb;
     float Fc = clear_coat * (0.04 + (1.0 - 0.04) * pow(1.0 - NdotV, 5.0));
     float3 specular_coat = prefiltered_cc * Fc;
     // Account for coat

@@ -385,11 +385,20 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, 1, false);
+        1, 1, 4, false);
     renderer->scene_depth = texture::create(
         pWindow->width, pWindow->height,
         DXGI_FORMAT_D24_UNORM_S8_UINT,
         D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE,
+        true,
+        nullptr, 0,
+        1, 1, 1, false);
+
+    // Texture to resolve MSAA into
+    renderer->resolved_color = texture::create(
+        pWindow->width, pWindow->height,
+        DXGI_FORMAT_R16G16B16A16_FLOAT,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
         1, 1, 1, false);
@@ -872,7 +881,7 @@ PipelineId renderer::create_depth_prepass(Renderer *renderer) {
         D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, 1, false);
+        1, 1, 4, false);
 
     return zpass_pipeline;
 }
@@ -934,7 +943,7 @@ void renderer::render(Renderer *renderer, Scene *scene) {
     // float clearColor[4] = {0.36f, 0.36f, 0.36f, 1.0f};
     float clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
-    Texture *scene_depth_tex = &renderer->textures[renderer->scene_depth.id];
+    Texture *scene_depth_tex = &renderer->textures[renderer->z_depth.id];
     bind_render_target(renderer, scene_color_tex->rtv[0].Get(), scene_depth_tex->dsv.Get());
     clear_render_target(renderer, scene_color_tex->rtv[0].Get(), scene_depth_tex->dsv.Get(), clearColor);
 
@@ -956,11 +965,19 @@ void renderer::render(Renderer *renderer, Scene *scene) {
     render_forward_plus_opaque(renderer, scene);
 
     // Deferred rendering
-    render_gbuffer(renderer, scene);
-    render_lighting_pass(renderer, scene);
+    // render_gbuffer(renderer, scene);
+    // render_lighting_pass(renderer, scene);
 
     // Render the environment map
     render_skybox(renderer, scene->active_cam);
+
+    // Resolve MSAA textures
+    Texture *resolved = texture::get(renderer, renderer->resolved_color);
+    renderer->pContext->ResolveSubresource(
+        resolved->texture.Get(), 0,
+        scene_color_tex->texture.Get(), 0,
+        DXGI_FORMAT_R16G16B16A16_FLOAT
+    );
 
     // Render FXAA pass
     // render_fxaa_pass(renderer);
@@ -1223,7 +1240,8 @@ void renderer::render_bloom_pass(Renderer *renderer) {
     // For convenience but could be useful to bypass some dereferencing as well
     ID3D11DeviceContext *context = renderer->pContext.Get();
 
-    ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->scene_color.id].srv.Get();
+    ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->resolved_color.id].srv.Get();
+    // ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->scene_color.id].srv.Get();
     // ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->fxaa_color.id].srv.Get();
 
     // 1. Threshold pass
@@ -1367,7 +1385,8 @@ void renderer::render_tonemap_pass(Renderer *renderer) {
 
     // Bind previous render target as texture
     // Texture *scene_color_tex = &renderer->textures[renderer->fxaa_color.id];
-    Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
+    // Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
+    Texture *scene_color_tex = &renderer->textures[renderer->resolved_color.id];
     Texture *bloom_tex = &renderer->textures[renderer->bloom_mips[0].id];
     ID3D11ShaderResourceView *srvs[] = {scene_color_tex->srv.Get(), bloom_tex->srv.Get()};
     renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -1392,6 +1411,8 @@ void renderer::render_tonemap_pass(Renderer *renderer) {
 }
 
 void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
+    BEGIN_D3D11_EVENT(renderer, L"Skybox");
+
     ShaderPipeline *skybox_shader = shader::get_pipeline(&renderer->shader_system, renderer->skybox_shader);
     if (!skybox_shader) {
         LOG("%s: Warning! Skybox shader couldn't be retrieved. Skipping.", __func__);
@@ -1405,7 +1426,7 @@ void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
 
     // Bind the RTV
     Texture *scene_rt = texture::get(renderer, renderer->scene_color);
-    Texture *depth = texture::get(renderer, renderer->scene_depth);
+    Texture *depth = texture::get(renderer, renderer->z_depth);
     if (!scene_rt) return;
     context->OMSetRenderTargets(1, scene_rt->rtv[0].GetAddressOf(), depth->dsv.Get());
 
@@ -1435,6 +1456,8 @@ void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
     // Reset states?
     renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
     renderer->pContext->RSSetState(renderer->default_raster.Get());
+
+    END_D3D11_EVENT(renderer)
 }
 
 void renderer::render_depth_prepass(Renderer *renderer, Scene *scene) {
@@ -1495,6 +1518,8 @@ void renderer::render_depth_prepass(Renderer *renderer, Scene *scene) {
 }
 
 void renderer::render_forward_plus_opaque(Renderer *renderer, Scene *scene) {
+    BEGIN_D3D11_EVENT(renderer, L"Opaque Pass (Forward+)");
+
     renderer->pContext->OMSetDepthStencilState(renderer->skybox_depth_state.Get(), 0);
 
     // Update per frame constant buffer
@@ -1567,6 +1592,8 @@ void renderer::render_forward_plus_opaque(Renderer *renderer, Scene *scene) {
         // Draw the mesh
         mesh::draw(renderer->pContext.Get(), gpu_mesh);
     }
+
+    END_D3D11_EVENT(renderer);
 }
 
 void renderer::bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv) {
@@ -1585,7 +1612,7 @@ void renderer::clear_render_target(Renderer *renderer, ID3D11RenderTargetView *r
 bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
     // TextureId hdri = texture::load_hdr("assets/photo_studio_loft_hall_4k.hdr");
     // TextureId hdri = texture::load_hdr("assets/metal_studio_23.hdr");
-    TextureId hdri = texture::load_hdr("assets/autoshop_01_4k_alt.hdr");
+    TextureId hdri = texture::load_hdr("assets/autoshop_01_4k.hdr");
     Texture *hdri_tex = &renderer->textures[hdri.id];
 
     renderer->cubemap_id = texture::create(
