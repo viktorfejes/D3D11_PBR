@@ -191,6 +191,7 @@ TextureId texture::create(uint16_t width,
     t->is_cubemap = is_cubemap;
     t->bind_flags = bind_flags;
     t->has_srv = generate_srv;
+    t->msaa_samples = msaa_samples;
 
     return t->id;
 }

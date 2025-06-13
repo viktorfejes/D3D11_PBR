@@ -95,6 +95,48 @@ struct alignas(16) CBLighting {
     float _padding0;
 };
 
+enum RasterizerState {
+    RASTER_SOLID_BACKFACE,
+    RASTER_SOLID_FRONTFACE,
+    RASTER_SOLID_NONE,
+    RASTER_WIREFRAME,
+    RASTER_SHADOW_DEPTH_BIAS,
+    RASTER_REVERSE_Z,
+
+    RASTER_STATE_COUNT
+};
+
+enum DepthStencilState {
+    DEPTH_DEFAULT,
+    DEPTH_READ_ONLY,
+    DEPTH_NONE,
+    DEPTH_REVERSE_Z,
+    DEPTH_EQUAL_ONLY,
+
+    DEPTH_STATE_COUNT
+};
+
+enum BlendState {
+    BLEND_OPAQUE,
+    BLEND_ALPHA,
+    BLEND_ADDITIVE,
+    BLEND_PREMULTIPLIED_ALPHA,
+    BLEND_DISABLE_WRITE,
+
+    BLEND_STATE_COUNT
+};
+
+enum SamplerState {
+    SAMPLER_LINEAR_WRAP,
+    SAMPLER_LINEAR_CLAMP,
+    SAMPLER_POINT_WRAP,
+    SAMPLER_POINT_CLAMP,
+    SAMPLER_SHADOW_COMPARISON,
+    SAMPLER_ANISOTROPIC_WRAP,
+
+    SAMPLER_STATE_COUNT
+};
+
 struct Renderer {
     ShaderSystemState shader_system;
 
@@ -188,9 +230,17 @@ struct Renderer {
 
     // Resolved MSAA texture for post
     TextureId resolved_color;
+    TextureId ping_pong_color1;
+    PipelineId post_shader;
 
     // TEMP:
     Microsoft::WRL::ComPtr<ID3D11Buffer> debug_cb_ptr;
+
+    // Pipeline States
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState> rasterizer_states[RASTER_STATE_COUNT];
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> depth_states[DEPTH_STATE_COUNT];
+    Microsoft::WRL::ComPtr<ID3D11BlendState> blend_states[BLEND_STATE_COUNT];
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_states[SAMPLER_STATE_COUNT];
 };
 
 namespace renderer {
@@ -199,7 +249,6 @@ bool initialize(Renderer *renderer, Window *window);
 void shutdown(Renderer *renderer);
 
 // TODO: These should probably be static, as well
-PipelineId create_pbr_shader_pipeline(Renderer *renderer);
 PipelineId create_tonemap_shader_pipeline(Renderer *renderer);
 bool create_bloom_shader_pipeline(Renderer *renderer, PipelineId *threshold_pipeline, PipelineId *downsample_pipeline, PipelineId *upsample_pipeline);
 PipelineId create_fxaa_pipeline(Renderer *renderer);
@@ -208,12 +257,14 @@ PipelineId create_gbuffer_pipeline(Renderer *renderer);
 PipelineId create_lighting_pass_pipeline(Renderer *renderer);
 PipelineId create_depth_prepass(Renderer *renderer);
 PipelineId create_forward_plus_opaque(Renderer *renderer);
+bool create_post_process_pipeline(Renderer *renderer, PipelineId *out_pipeline);
 
-void begin_frame(Renderer *renderer);
+void begin_frame(Renderer *renderer, Scene *scene);
 void end_frame(Renderer *renderer);
 void render(Renderer *renderer, Scene *scene);
 
 void render_scene(Renderer *renderer, Scene *scene);
+void render_post(Renderer *renderer);
 void render_gbuffer(Renderer *renderer, Scene *scene);
 void render_lighting_pass(Renderer *renderer, Scene *scene);
 void render_bloom_pass(Renderer *renderer);
@@ -222,6 +273,7 @@ void render_tonemap_pass(Renderer *renderer);
 void render_skybox(Renderer *renderer, SceneCamera *camera);
 void render_depth_prepass(Renderer *renderer, Scene *scene);
 void render_forward_plus_opaque(Renderer *renderer, Scene *scene);
+void render_post_process(Renderer *renderer);
 
 void bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv);
 void clear_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv, float *clear_color);

@@ -1,4 +1,4 @@
-cbuffer SkyboxCB : register(b0) {
+cbuffer SkyboxCB : register(b1) {
     row_major float4x4 view;
     row_major float4x4 projection;
 };

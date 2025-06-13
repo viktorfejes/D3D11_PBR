@@ -158,7 +158,7 @@ void application::run() {
 
         update();
 
-        renderer::begin_frame(&pState->renderer);
+        renderer::begin_frame(&pState->renderer, &pState->scenes[0]);
         renderer::render(&pState->renderer, &pState->scenes[0]);
         renderer::end_frame(&pState->renderer);
 
