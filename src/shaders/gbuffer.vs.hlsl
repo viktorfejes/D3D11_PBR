@@ -1,5 +1,10 @@
 cbuffer PerFrameConstants : register(b0) {
-    row_major float4x4 viewProjectionMatrix;
+    row_major float4x4 view_matrix;
+    row_major float4x4 projection_matrix;
+    row_major float4x4 view_projection_matrix;
+    row_major float4x4 inv_view_projection_matrix;
+    float3 camera_position;
+    float _padding;
 };
 
 cbuffer PerObjectConstants : register(b1) {
@@ -70,7 +75,7 @@ VSOutput main(VSInput input) {
     float3x3 world_inverse_transpose = transpose((float3x3)inverse(worldMatrix));
 
     VSOutput output;
-    output.clipSpacePosition = mul(worldPos, viewProjectionMatrix);
+    output.clipSpacePosition = mul(worldPos, view_projection_matrix);
     output.texCoord = input.texCoord;
     output.worldPosition = worldPos.xyz;
     output.worldNormal = normalize(mul(input.normal, worldInvTranspose));

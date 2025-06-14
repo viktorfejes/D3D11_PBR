@@ -1,6 +1,10 @@
-cbuffer SkyboxCB : register(b1) {
-    row_major float4x4 view;
-    row_major float4x4 projection;
+cbuffer PerFrameConstants : register(b0) {
+    row_major float4x4 view_matrix;
+    row_major float4x4 projection_matrix;
+    row_major float4x4 view_projection_matrix;
+    row_major float4x4 inv_view_projection_matrix;
+    float3 camera_position;
+    float _padding;
 };
 
 struct VSOutput {
@@ -62,10 +66,10 @@ VSOutput main(uint vertexID : SV_VertexID) {
     float3 local_position = positions[vertexID];
 
     // Remove translation from view matrix
-    row_major float3x3 rot_view = (float3x3)view;
+    row_major float3x3 rot_view = (float3x3)view_matrix;
 
     float3 rotated_pos = mul(local_position, rot_view);
-    float4 clip_pos = mul(float4(rotated_pos, 1.0f), projection);
+    float4 clip_pos = mul(float4(rotated_pos, 1.0f), projection_matrix);
 
     VSOutput o;
     o.position = clip_pos.xyww;

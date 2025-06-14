@@ -8,7 +8,16 @@ Texture2D emissionTexture : register(t4);
 // Samplers
 SamplerState linearSampler : register(s0);
 
-cbuffer PerMaterialConstants : register(b0) {
+cbuffer PerFrameConstants : register(b0) {
+    row_major float4x4 view_matrix;
+    row_major float4x4 projection_matrix;
+    row_major float4x4 view_projection_matrix;
+    row_major float4x4 inv_view_projection_matrix;
+    float3 camera_position;
+    float _padding;
+};
+
+cbuffer PerMaterialConstants : register(b1) {
     float3 albedoColor;
     float metallicValue;
     float roughnessValue;

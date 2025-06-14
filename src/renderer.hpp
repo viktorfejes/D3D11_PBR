@@ -16,28 +16,13 @@
 #define MAX_MATERIALS 32
 #define MAX_TEXTURES 64
 
-/* TEMP: Switch between GBUFFER visualizations */
-enum GbufferDebugState {
-    GBUFFER_FULL,
-    GBUFFER_ALBEDO,
-    GBUFFER_ROUGHNESS,
-    GBUFFER_NORMAL,
-    GBUFFER_METALLIC,
-    GBUFFER_EMISSIVE,
-    GBUFFER_WORLD_POSITION,
-    GBUFFER_DEBUG_COUNT,
-};
-
-struct alignas(16) CBDebug {
-    uint32_t flag;
-    float _pad[3];
-};
-/* ------------------------------------------- */
-
 struct alignas(16) CBPerFrame {
-    DirectX::XMFLOAT4X4 viewProjectionMatrix;
+    DirectX::XMFLOAT4X4 view_matrix;
+    DirectX::XMFLOAT4X4 projection_matrix;
+    DirectX::XMFLOAT4X4 view_projection_matrix;
+    DirectX::XMFLOAT4X4 inv_view_projection_matrix;
     DirectX::XMFLOAT3 camera_position;
-    float padding[13];
+    float padding[1];
 };
 
 // I might merge this with the per frame Constant Buffer
@@ -112,6 +97,7 @@ enum DepthStencilState {
     DEPTH_NONE,
     DEPTH_REVERSE_Z,
     DEPTH_EQUAL_ONLY,
+    DEPTH_LESS_EQUAL_NO_WRITE,
 
     DEPTH_STATE_COUNT
 };
@@ -263,17 +249,15 @@ void begin_frame(Renderer *renderer, Scene *scene);
 void end_frame(Renderer *renderer);
 void render(Renderer *renderer, Scene *scene);
 
-void render_scene(Renderer *renderer, Scene *scene);
-void render_post(Renderer *renderer);
-void render_gbuffer(Renderer *renderer, Scene *scene);
-void render_lighting_pass(Renderer *renderer, Scene *scene);
-void render_bloom_pass(Renderer *renderer);
+void render_gbuffer(Renderer *renderer, Scene *scene, Texture *rt0, Texture *rt1, Texture *rt2, Texture *depth);
+void render_lighting_pass(Renderer *renderer, Texture *gbuffer_a, Texture *gbuffer_b, Texture *gbuffer_c, Texture *depth, Texture *irradiance_map, Texture *prefilter_map, Texture *brdf_lut, Texture *rt);
+void render_bloom_pass(Renderer *renderer, Texture *color_buffer, Texture **bloom_mips, uint32_t mip_count);
 void render_fxaa_pass(Renderer *renderer);
-void render_tonemap_pass(Renderer *renderer);
-void render_skybox(Renderer *renderer, SceneCamera *camera);
+void render_tonemap_pass(Renderer *renderer, Texture *scene_color, Texture *bloom_texture, Texture *out_rt);
+void render_skybox(Renderer *renderer, Texture *skybox, Texture *depth, Texture *rt);
 void render_depth_prepass(Renderer *renderer, Scene *scene);
 void render_forward_plus_opaque(Renderer *renderer, Scene *scene);
-void render_post_process(Renderer *renderer);
+void render_post_process(Renderer *renderer, Texture *in_tex, ID3D11RenderTargetView *out);
 
 void bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv);
 void clear_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv, float *clear_color);
@@ -286,7 +270,5 @@ bool generate_BRDF_LUT(Renderer *renderer);
 void on_window_resize(Renderer *renderer, uint16_t width, uint16_t height);
 
 ID3D11Device *get_device(Renderer *renderer);
-// TEMP:
-void set_debug_flag(GbufferDebugState state);
 
 } // namespace renderer

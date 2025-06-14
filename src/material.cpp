@@ -56,7 +56,7 @@ Material *material::get(Renderer *renderer, MaterialId material_id) {
     return nullptr;
 }
 
-void material::bind(Renderer *renderer, Material *material, uint8_t start_slot) {
+void material::bind(Renderer *renderer, Material *material, uint8_t start_cb, uint8_t start_tex) {
     D3D11_MAPPED_SUBRESOURCE mappedResource;
     HRESULT hr = renderer->pContext->Map(renderer->pCBPerMaterial.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
     if (FAILED(hr)) {
@@ -71,7 +71,7 @@ void material::bind(Renderer *renderer, Material *material, uint8_t start_slot) 
     cb_ptr->roughness_value = material->roughness_value;
 
     renderer->pContext->Unmap(renderer->pCBPerMaterial.Get(), 0);
-    renderer->pContext->PSSetConstantBuffers(0, 1, renderer->pCBPerMaterial.GetAddressOf());
+    renderer->pContext->PSSetConstantBuffers((UINT)start_cb, 1, renderer->pCBPerMaterial.GetAddressOf());
 
     // Look up the texture based on the id
     Texture *albedo_tex = texture::get(renderer, material->albedo_texture);
@@ -87,5 +87,5 @@ void material::bind(Renderer *renderer, Material *material, uint8_t start_slot) 
         normal_tex->srv.Get(),
         emission_tex->srv.Get(),
     };
-    renderer->pContext->PSSetShaderResources((UINT)start_slot, ARRAYSIZE(srvs), srvs);
+    renderer->pContext->PSSetShaderResources((UINT)start_tex, ARRAYSIZE(srvs), srvs);
 }

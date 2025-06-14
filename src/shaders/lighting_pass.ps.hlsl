@@ -14,18 +14,14 @@ Texture2D brdf_lut : register(t6);
 // Sampler for textures
 SamplerState samp : register(s0);
 
-cbuffer CBLighting : register(b0) {
-    row_major float4x4 inv_view_projection;
+cbuffer PerFrameConstants : register(b0) {
+    row_major float4x4 view_matrix;
+    row_major float4x4 projection_matrix;
+    row_major float4x4 view_projection_matrix;
+    row_major float4x4 inv_view_projection_matrix;
     float3 camera_position;
-    float _pad0;
+    float _padding;
 };
-
-cbuffer CBDebug : register(b1) {
-    uint debug_flag;
-    float _pad1;
-    float _pad2; 
-    float _pad3; 
-}
 
 struct PSInput {
     float4 pos : SV_POSITION;
@@ -50,7 +46,7 @@ float4 main(PSInput input) : SV_TARGET {
     ndc.y = (1.0 - uv.y) * 2.0 - 1.0;
     float4 clip_position = float4(ndc, z, 1.0);
 
-    float4 world_pos_h = mul(clip_position, inv_view_projection);
+    float4 world_pos_h = mul(clip_position, inv_view_projection_matrix);
     float3 world_position = world_pos_h.xyz / world_pos_h.w;
 
     // =======================================================
@@ -116,17 +112,7 @@ float4 main(PSInput input) : SV_TARGET {
 
     float3 Lo = emission + indirect_lighting;
 
-    // TEMP: For debug display!
-    float3 debug_out[7];
-    debug_out[0] = Lo;
-    debug_out[1] = albedo;
-    debug_out[2] = roughness;
-    debug_out[3] = normal;
-    debug_out[4] = metallic;
-    debug_out[5] = emission;
-    debug_out[6] = world_position;
-
-    return float4(debug_out[debug_flag], 1.0f);
+    return float4(Lo, 1.0f);
 }
 
 

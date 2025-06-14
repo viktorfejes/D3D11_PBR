@@ -45,6 +45,7 @@ struct SceneCamera {
     DirectX::XMFLOAT4X4 view_projection_matrix;
     bool is_view_dirty;
     bool is_projection_dirty;
+    bool is_view_projection_dirty;
 };
 
 struct LightInstance {

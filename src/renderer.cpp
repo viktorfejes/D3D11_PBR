@@ -16,7 +16,7 @@
 
 #define RENDERING_METHOD_FORWARD_PLUS 0
 #define RENDERING_METHOD_DEFERRED 1
-#define RENDERING_METHOD RENDERING_METHOD_FORWARD_PLUS
+#define RENDERING_METHOD RENDERING_METHOD_DEFERRED
 
 #ifndef MIN
 #define MIN(a, b) (a < b ? a : b)
@@ -40,9 +40,6 @@
 #define BEGIN_D3D11_EVENT(renderer, lname) UNUSED(renderer)
 #define END_D3D11_EVENT(renderer) UNUSED(renderer)
 #endif
-
-// TEMP: Only for the video...
-static uint32_t debug_flag = 0;
 
 // Static functions
 static bool create_default_shaders(Renderer *renderer);
@@ -400,7 +397,7 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
         true,
         nullptr, 0,
-        1, 1, 4, false);
+        1, 1, 1, false);
     renderer->scene_depth = texture::create(
         pWindow->width, pWindow->height,
         DXGI_FORMAT_D24_UNORM_S8_UINT,
@@ -438,6 +435,8 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     generate_IBL_prefilter(renderer, 5);
     // Generate the BRDF LUT
     generate_BRDF_LUT(renderer);
+
+    UNUSED(resolve_msaa_texture);
 
     return true;
 }
@@ -782,21 +781,6 @@ PipelineId renderer::create_lighting_pass_pipeline(Renderer *renderer) {
         return id::invalid();
     }
 
-    /* -------------------------------------------------------- */
-    // TEMP:
-    D3D11_BUFFER_DESC debug_cb = {};
-    debug_cb.Usage = D3D11_USAGE_DYNAMIC;
-    debug_cb.ByteWidth = sizeof(CBDebug);
-    debug_cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    debug_cb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-
-    hr = renderer->pDevice->CreateBuffer(&debug_cb, nullptr, renderer->debug_cb_ptr.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("Renderer error: Failed to create constant buffer for debug settings");
-        return id::invalid();
-    }
-    /* -------------------------------------------------------- */
-
     ShaderId lighting_pass_ps = shader::create_module_from_file(
         &renderer->shader_system,
         renderer->pDevice.Get(),
@@ -934,7 +918,7 @@ void renderer::begin_frame(Renderer *renderer, Scene *scene) {
     float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     context->ClearRenderTargetView(renderer->pRenderTargetView.Get(), clear_color);
 
-    // Update per frame constants
+    // Update per frame constants -------------------------------------------------- */
     D3D11_MAPPED_SUBRESOURCE mappedResource;
     HRESULT hr = renderer->pContext->Map(renderer->pCBPerFrame.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
     if (FAILED(hr)) {
@@ -943,11 +927,19 @@ void renderer::begin_frame(Renderer *renderer, Scene *scene) {
     }
 
     CBPerFrame *perFramePtr = (CBPerFrame *)mappedResource.pData;
-    perFramePtr->viewProjectionMatrix = scene::camera_get_view_projection_matrix(scene->active_cam);
+    perFramePtr->view_matrix = scene::camera_get_view_matrix(scene->active_cam);
+    perFramePtr->projection_matrix = scene::camera_get_projection_matrix(scene->active_cam);
+    perFramePtr->view_projection_matrix = scene::camera_get_view_projection_matrix(scene->active_cam);
+    DirectX::XMMATRIX inv_view_projection = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&perFramePtr->view_projection_matrix));
+    DirectX::XMStoreFloat4x4(&perFramePtr->inv_view_projection_matrix, inv_view_projection);
     perFramePtr->camera_position = scene->active_cam->position;
 
-    renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
-    renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
+    context->Unmap(renderer->pCBPerFrame.Get(), 0);
+
+    // Bind the per frame constants to both the vertex and pixel stages
+    context->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
+    context->PSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
+    /* ------------------------------------------------------------------------------- */
 
     // Set viewport to window size
     D3D11_VIEWPORT viewport = {};
@@ -966,19 +958,6 @@ void renderer::end_frame(Renderer *renderer) {
 }
 
 void renderer::render(Renderer *renderer, Scene *scene) {
-    // Render the scene
-    render_scene(renderer, scene);
-
-    // Resolve MSAA textures
-    Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
-    Texture *resolved = texture::get(renderer, renderer->resolved_color);
-    resolve_msaa_texture(renderer->pContext.Get(), scene_color_tex, resolved);
-
-    // Render post passes
-    render_post(renderer);
-}
-
-void renderer::render_scene(Renderer *renderer, Scene *scene) {
 #if (RENDERING_METHOD == RENDERING_METHOD_FORWARD_PLUS)
     // Forward+ rendering
     render_depth_prepass(renderer, scene);
@@ -987,67 +966,77 @@ void renderer::render_scene(Renderer *renderer, Scene *scene) {
 
 #if (RENDERING_METHOD == RENDERING_METHOD_DEFERRED)
     // Deferred rendering
-    render_gbuffer(renderer, scene);
-    render_lighting_pass(renderer, scene);
+    Texture *gbuffer_a = texture::get(renderer, renderer->gbuffer_rt0);
+    Texture *gbuffer_b = texture::get(renderer, renderer->gbuffer_rt1);
+    Texture *gbuffer_c = texture::get(renderer, renderer->gbuffer_rt2);
+    Texture *depth = texture::get(renderer, renderer->scene_depth);
+    Texture *scene_color = texture::get(renderer, renderer->scene_color);
+    Texture *irradiance_map = texture::get(renderer, renderer->irradiance_cubemap);
+    Texture *prefilter_map = texture::get(renderer, renderer->prefilter_map);
+    Texture *brdf_lut = texture::get(renderer, renderer->brdf_lut);
+
+    render_gbuffer(renderer, scene, gbuffer_a, gbuffer_b, gbuffer_c, depth);
+    render_lighting_pass(renderer, gbuffer_a, gbuffer_b, gbuffer_c, depth, irradiance_map, prefilter_map, brdf_lut, scene_color);
 #endif
 
     // Render the environment map
-    render_skybox(renderer, scene->active_cam);
-}
+    Texture *skybox = texture::get(renderer, renderer->cubemap_id);
+    render_skybox(renderer, skybox, depth, scene_color);
 
-void renderer::render_post(Renderer *renderer) {
+#if (RENDERING_METHOD == RENDERING_METHOD_FORWARD_PLUS)
+    // Resolve MSAA textures
+    Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
+    Texture *resolved = texture::get(renderer, renderer->resolved_color);
+    resolve_msaa_texture(renderer->pContext.Get(), scene_color_tex, resolved);
+#endif
+
     // Render bloom pass
-    render_bloom_pass(renderer);
+    Texture *bloom_mips[] = {
+        texture::get(renderer, renderer->bloom_mips[0]),
+        texture::get(renderer, renderer->bloom_mips[1]),
+        texture::get(renderer, renderer->bloom_mips[2]),
+        texture::get(renderer, renderer->bloom_mips[3]),
+        texture::get(renderer, renderer->bloom_mips[4]),
+        texture::get(renderer, renderer->bloom_mips[5]),
+    };
+    render_bloom_pass(renderer, scene_color, bloom_mips, ARRAYSIZE(bloom_mips));
 
     // Render the tonemap pass
-    render_tonemap_pass(renderer);
+    Texture *pp0 = texture::get(renderer, renderer->ping_pong_color1);
+    render_tonemap_pass(renderer, scene_color, bloom_mips[0], pp0);
 
     // Render extra post
-    render_post_process(renderer);
+    // TODO: Look into if I can capture the swapchain's rendertarget in a texture, as well
+    // then modify this so it takes in a texture not a render target
+    render_post_process(renderer, pp0, renderer->pRenderTargetView.Get());
 }
 
-void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
+void renderer::render_gbuffer(Renderer *renderer, Scene *scene,
+                              Texture *rt0, Texture *rt1, Texture *rt2, Texture *depth) {
     BEGIN_D3D11_EVENT(renderer, L"G-buffer Pass (Deferred)");
 
-    // Bind the pipeline
+    ID3D11DeviceContext *context = renderer->pContext.Get();
+    const float clear_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    // Bind pipeline states
+    context->OMSetDepthStencilState(renderer->depth_states[DEPTH_DEFAULT].Get(), 0);
+    context->RSSetState(renderer->rasterizer_states[RASTER_SOLID_BACKFACE].Get());
+    context->OMSetBlendState(renderer->blend_states[BLEND_OPAQUE].Get(), nullptr, 0xFFFFFFFF);
+
+    // Bind the the render targets and depth and clear them
+    ID3D11RenderTargetView *rtvs[] = {rt0->rtv[0].Get(), rt1->rtv[0].Get(), rt2->rtv[0].Get()};
+    context->ClearRenderTargetView(rtvs[0], clear_color);
+    context->ClearRenderTargetView(rtvs[1], clear_color);
+    context->ClearRenderTargetView(rtvs[2], clear_color);
+    context->ClearDepthStencilView(depth->dsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+    context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, depth->dsv.Get());
+
+    // Bind the shader
     ShaderPipeline *gbuffer_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->gbuffer_pipeline);
     shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), gbuffer_pipeline);
 
-    // Set some of the states...
-    renderer->pContext->OMSetDepthStencilState(renderer->pDepthStencilState.Get(), 0);
-    renderer->pContext->RSSetState(renderer->default_raster.Get());
-    renderer->pContext->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
-
-    // Update per frame constants
-    D3D11_MAPPED_SUBRESOURCE mappedResource;
-    HRESULT hr = renderer->pContext->Map(renderer->pCBPerFrame.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
-    if (FAILED(hr)) {
-        LOG("Renderer error: Failed to map per object constant buffer");
-        return;
-    }
-    CBPerFrame *perFramePtr = (CBPerFrame *)mappedResource.pData;
-    perFramePtr->viewProjectionMatrix = scene::camera_get_view_projection_matrix(scene->active_cam);
-    // TODO: This won't be needed for the gbuffer
-    perFramePtr->camera_position = scene->active_cam->position;
-
-    renderer->pContext->Unmap(renderer->pCBPerFrame.Get(), 0);
-    renderer->pContext->VSSetConstantBuffers(0, 1, renderer->pCBPerFrame.GetAddressOf());
-
-    // Bind render targets
-    Texture *rtv0 = texture::get(renderer, renderer->gbuffer_rt0);
-    Texture *rtv1 = texture::get(renderer, renderer->gbuffer_rt1);
-    Texture *rtv2 = texture::get(renderer, renderer->gbuffer_rt2);
-    Texture *depth = texture::get(renderer, renderer->scene_depth);
-
-    ID3D11RenderTargetView *rtvs[] = {rtv0->rtv[0].Get(), rtv1->rtv[0].Get(), rtv2->rtv[0].Get()};
-
-    const float clear_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    renderer->pContext->ClearRenderTargetView(rtvs[0], clear_color);
-    renderer->pContext->ClearRenderTargetView(rtvs[1], clear_color);
-    renderer->pContext->ClearRenderTargetView(rtvs[2], clear_color);
-    renderer->pContext->ClearDepthStencilView(depth->dsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
-
-    renderer->pContext->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, depth->dsv.Get());
+    // Bind the samplers
+    context->PSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
 
     // Render meshes
     MaterialId current_material_bound = id::invalid();
@@ -1068,7 +1057,7 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
             }
 
             // Bind the material's values and textures
-            material::bind(renderer, mat, 0);
+            material::bind(renderer, mat, 1, 0);
 
             // Update the currently bound material
             current_material_bound = mat->id;
@@ -1087,209 +1076,183 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene) {
         mesh::draw(renderer->pContext.Get(), gpu_mesh);
     }
 
-    // Unbind RTV's
-    ID3D11RenderTargetView *nullRTVs[8] = {nullptr};
+    // Unbind RTV's as the output of the Gbuffer will definitely
+    // be used as shader resources
+    ID3D11RenderTargetView *nullRTVs[ARRAYSIZE(rtvs)] = {nullptr};
     renderer->pContext->OMSetRenderTargets(_countof(nullRTVs), nullRTVs, nullptr);
 
     END_D3D11_EVENT(renderer);
 }
 
-void renderer::render_lighting_pass(Renderer *renderer, Scene *scene) {
+void renderer::render_lighting_pass(Renderer *renderer, Texture *gbuffer_a, Texture *gbuffer_b, Texture *gbuffer_c, Texture *depth,
+                                    Texture *irradiance_map, Texture *prefilter_map, Texture *brdf_lut,
+                                    Texture *rt) {
     BEGIN_D3D11_EVENT(renderer, L"Lighting Pass (Deferred)");
 
     ID3D11DeviceContext *context = renderer->pContext.Get();
+    const float clear_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
-    // Bind the pipeline
+    // Bind pipeline states
+    context->OMSetDepthStencilState(renderer->depth_states[DEPTH_NONE].Get(), 0);
+    context->RSSetState(renderer->rasterizer_states[RASTER_SOLID_NONE].Get());
+    context->OMSetBlendState(renderer->blend_states[BLEND_OPAQUE].Get(), nullptr, 0xFFFFFFFF);
+
+    // Clear and Bind the RTV
+    context->ClearRenderTargetView(rt->rtv[0].Get(), clear_color);
+    context->OMSetRenderTargets(1, rt->rtv[0].GetAddressOf(), nullptr);
+
+    // Bind the shader pipeline
     ShaderPipeline *lighting_pass_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->lighting_pass_pipeline);
     shader::bind_pipeline(&renderer->shader_system, context, lighting_pass_pipeline);
 
-    // No depth testing
-    renderer->pContext->OMSetDepthStencilState(nullptr, 0);
+    // Bind the samplers
+    context->PSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
 
-    // Fetch G-buffer SRV's
-    Texture *albedo_roughness = texture::get(renderer, renderer->gbuffer_rt0);
-    Texture *world_normal = texture::get(renderer, renderer->gbuffer_rt1);
-    Texture *emission_metallic = texture::get(renderer, renderer->gbuffer_rt2);
-    if (!albedo_roughness || !world_normal || !emission_metallic) {
-        return;
-    }
-
-    // Fetch the depth texture
-    Texture *depth_tex = texture::get(renderer, renderer->scene_depth);
-    if (!depth_tex) return;
-
-    // Fetch the IBL
-    Texture *irradiance_tex = texture::get(renderer, renderer->irradiance_cubemap);
-    Texture *prefilter_map = texture::get(renderer, renderer->prefilter_map);
-    Texture *brdf_lut = texture::get(renderer, renderer->brdf_lut);
-    if (!irradiance_tex || !prefilter_map || !brdf_lut) {
-        return;
-    }
-
+    // Bind the SRV's including the gbuffer outputs and the IBL textures
     ID3D11ShaderResourceView *srvs[] = {
-        albedo_roughness->srv.Get(),
-        world_normal->srv.Get(),
-        emission_metallic->srv.Get(),
-        depth_tex->srv.Get(),
-        irradiance_tex->srv.Get(),
+        gbuffer_a->srv.Get(),
+        gbuffer_b->srv.Get(),
+        gbuffer_c->srv.Get(),
+        depth->srv.Get(),
+        irradiance_map->srv.Get(),
         prefilter_map->srv.Get(),
         brdf_lut->srv.Get(),
     };
-
-    // Bind the SRVs
     context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-
-    // Bind the RTV
-    Texture *lighting_rt = texture::get(renderer, renderer->scene_color);
-    if (!lighting_rt) return;
-    context->OMSetRenderTargets(1, lighting_rt->rtv[0].GetAddressOf(), nullptr);
-
-    // Bind the constant buffer with Camera Position and Inverse View Projection Matrix
-    DirectX::XMFLOAT4X4 view_projection = scene::camera_get_view_projection_matrix(scene->active_cam);
-    DirectX::XMMATRIX inv_view_projection = DirectX::XMMatrixInverse(nullptr, DirectX::XMLoadFloat4x4(&view_projection));
-
-    D3D11_MAPPED_SUBRESOURCE map;
-    context->Map(renderer->lp_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
-    ((CBLighting *)map.pData)->camera_position = scene->active_cam->position;
-    DirectX::XMStoreFloat4x4(&((CBLighting *)map.pData)->inv_view_projection, inv_view_projection);
-    context->Unmap(renderer->lp_cb_ptr.Get(), 0);
-    context->PSSetConstantBuffers(0, 1, renderer->lp_cb_ptr.GetAddressOf());
-
-    /* TEMP: ----------------------------------------------- */
-    D3D11_MAPPED_SUBRESOURCE debug_map;
-    context->Map(renderer->debug_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &debug_map);
-    ((CBDebug *)debug_map.pData)->flag = debug_flag;
-    context->Unmap(renderer->debug_cb_ptr.Get(), 0);
-    context->PSSetConstantBuffers(1, 1, renderer->debug_cb_ptr.GetAddressOf());
-    /* ----------------------------------------------------- */
 
     context->Draw(3, 0);
 
     // Unbind SRVs
-    ID3D11ShaderResourceView *nullSRVs[8] = {nullptr};
-    context->PSSetShaderResources(0, 8, nullSRVs);
+    ID3D11ShaderResourceView *nullSRVs[1] = {nullptr};
+    context->PSSetShaderResources(0, 1, nullSRVs);
 
     END_D3D11_EVENT(renderer);
 }
 
-void renderer::render_bloom_pass(Renderer *renderer) {
+void renderer::render_bloom_pass(Renderer *renderer, Texture *color_buffer, Texture **bloom_mips, uint32_t mip_count) {
     BEGIN_D3D11_EVENT(renderer, L"Bloom Pass");
 
     ID3D11DeviceContext *context = renderer->pContext.Get();
+    float clear_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 
     // Bind the states
     context->OMSetDepthStencilState(renderer->depth_states[DEPTH_NONE].Get(), 0);
     context->RSSetState(renderer->rasterizer_states[RASTER_SOLID_FRONTFACE].Get());
     context->OMSetBlendState(renderer->blend_states[BLEND_OPAQUE].Get(), nullptr, 0xFFFFFFFF);
 
-    // --- Threshold pass ---
-    {
-        
-    }
-
-    // --- Downsample chain ---
-    {
-        
-    }
-
-    // --- Upsample chain ---
-    {
-        
-    }
-    
-    float clear_color[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-
+    // Set up constant buffer for bloom
     BloomConstants bloom_constants = {};
     bloom_constants.bloom_threshold = 1.0f;
     bloom_constants.bloom_intensity = 1.0f;
     bloom_constants.bloom_knee = 0.2f;
 
-    ID3D11ShaderResourceView *scene_srv = renderer->textures[renderer->resolved_color.id].srv.Get();
-
-    // 1. Threshold pass
+    // Map and bind the constant buffer
     D3D11_MAPPED_SUBRESOURCE mapped;
     context->Map(renderer->bloom_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
     memcpy(mapped.pData, &bloom_constants, sizeof(BloomConstants));
     context->Unmap(renderer->bloom_cb_ptr.Get(), 0);
+    context->PSSetConstantBuffers(1, 1, renderer->bloom_cb_ptr.GetAddressOf());
 
-    // Fetch the threshold pipeline from id
-    ShaderPipeline *threshold_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->bloom_threshold_shader);
-    shader::bind_pipeline(&renderer->shader_system, context, threshold_pipeline);
-
-    Texture *bloom_mip_1 = &renderer->textures[renderer->bloom_mips[0].id];
-    context->ClearRenderTargetView(bloom_mip_1->rtv[0].Get(), clear_color);
-    context->OMSetRenderTargets(1, bloom_mip_1->rtv[0].GetAddressOf(), nullptr);
-    context->PSSetShaderResources(0, 1, &scene_srv);
-    context->PSSetConstantBuffers(0, 1, renderer->bloom_cb_ptr.GetAddressOf());
+    // Bind sampler state
+    context->PSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
 
     D3D11_VIEWPORT viewport = {};
-    viewport.Width = (float)bloom_mip_1->width;
-    viewport.Height = (float)bloom_mip_1->height;
-    viewport.MinDepth = 0.0f;
-    viewport.MaxDepth = 1.0f;
-    context->RSSetViewports(1, &viewport);
 
-    context->Draw(3, 0);
+    // --- Threshold pass ---
+    {
+        // Bind the render target and clear it
+        context->ClearRenderTargetView(bloom_mips[0]->rtv[0].Get(), clear_color);
+        context->OMSetRenderTargets(1, bloom_mips[0]->rtv[0].GetAddressOf(), nullptr);
 
-    // 2. Downsample chain
-    ShaderPipeline *downsample_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->bloom_downsample_shader);
-    shader::bind_pipeline(&renderer->shader_system, context, downsample_pipeline);
-    for (int i = 1; i < renderer->mip_count; ++i) {
-        Texture *bloom_mip = &renderer->textures[renderer->bloom_mips[i].id];
+        // Bind shader pipeline for threshold
+        ShaderPipeline *threshold_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->bloom_threshold_shader);
+        shader::bind_pipeline(&renderer->shader_system, context, threshold_pipeline);
 
-        // Update texel size for current target mip
-        bloom_constants.texel_size[0] = 1.0f / bloom_mip->width;
-        bloom_constants.texel_size[1] = 1.0f / bloom_mip->height;
-
-        context->Map(renderer->bloom_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-        memcpy(mapped.pData, &bloom_constants, sizeof(BloomConstants));
-        context->Unmap(renderer->bloom_cb_ptr.Get(), 0);
-
-        viewport.Width = (float)bloom_mip->width;
-        viewport.Height = (float)bloom_mip->height;
+        // Set the viewport as we are dealing with something smaller
+        viewport.Width = (float)bloom_mips[0]->width;
+        viewport.Height = (float)bloom_mips[0]->height;
+        viewport.MinDepth = 0.0f;
+        viewport.MaxDepth = 1.0f;
         context->RSSetViewports(1, &viewport);
 
-        context->ClearRenderTargetView(bloom_mip->rtv[0].Get(), clear_color);
-        context->OMSetRenderTargets(1, bloom_mip->rtv[0].GetAddressOf(), nullptr);
-        context->PSSetShaderResources(0, 1, renderer->textures[renderer->bloom_mips[i - 1].id].srv.GetAddressOf());
+        // Bind the scene color buffer as the starting point
+        context->PSSetShaderResources(0, 1, color_buffer->srv.GetAddressOf());
+
         context->Draw(3, 0);
     }
 
-    // 3. Upsample chain -- with additive blend state
-    context->OMSetBlendState(renderer->pAdditiveBS.Get(), nullptr, 0xFFFFFFFF);
-    ShaderPipeline *upsample_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->bloom_upsample_shader);
-    shader::bind_pipeline(&renderer->shader_system, context, upsample_pipeline);
-    for (int i = renderer->mip_count - 2; i >= 0; --i) {
-        Texture *bloom_mip = &renderer->textures[renderer->bloom_mips[i].id];
+    // --- Downsample chain ---
+    {
+        // Bind shader pipeline for downsample chain
+        ShaderPipeline *downsample_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->bloom_downsample_shader);
+        shader::bind_pipeline(&renderer->shader_system, context, downsample_pipeline);
 
-        // Update texel size for current target mip
-        bloom_constants.texel_size[0] = 1.0f / bloom_mip->width;
-        bloom_constants.texel_size[1] = 1.0f / bloom_mip->height;
+        for (uint32_t i = 1; i < mip_count; ++i) {
+            Texture *current_mip = bloom_mips[i];
 
-        // Add weights into the mix so each layer can gradually be less intense
-        int upsample_index = renderer->mip_count - 2 - i; // Goes 0 → N-2
-        float t = upsample_index / float(renderer->mip_count - 2);
-        // Smoothstep function
-        float smooth = t * t * (3.0f - 2.0f * t);
-        // Lerp from full (1.0) to low (0.5)
-        bloom_constants.bloom_mip_strength = std::lerp(1.0f, 0.2f, smooth);
-        // LOG("%f", bloom_constants.bloom_mip_strength);
+            // Update texel size for the current target mip
+            bloom_constants.texel_size[0] = 1.0f / current_mip->width;
+            bloom_constants.texel_size[1] = 1.0f / current_mip->height;
+            context->Map(renderer->bloom_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+            memcpy(mapped.pData, &bloom_constants, sizeof(BloomConstants));
+            context->Unmap(renderer->bloom_cb_ptr.Get(), 0);
 
-        context->Map(renderer->bloom_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-        memcpy(mapped.pData, &bloom_constants, sizeof(BloomConstants));
-        context->Unmap(renderer->bloom_cb_ptr.Get(), 0);
+            // Update the bound render target and clear it
+            context->ClearRenderTargetView(current_mip->rtv[0].Get(), clear_color);
+            context->OMSetRenderTargets(1, current_mip->rtv[0].GetAddressOf(), nullptr);
 
-        viewport.Width = (float)bloom_mip->width;
-        viewport.Height = (float)bloom_mip->height;
-        context->RSSetViewports(1, &viewport);
+            // Update the viewport to the new size
+            viewport.Width = (float)current_mip->width;
+            viewport.Height = (float)current_mip->height;
+            context->RSSetViewports(1, &viewport);
 
-        // No clear, we are adding existing content
-        context->OMSetRenderTargets(1, bloom_mip->rtv[0].GetAddressOf(), nullptr);
-        context->PSSetShaderResources(0, 1, renderer->textures[renderer->bloom_mips[i + 1].id].srv.GetAddressOf());
-        context->Draw(3, 0);
+            // Bind the previous mip as the input
+            context->PSSetShaderResources(0, 1, bloom_mips[i - 1]->srv.GetAddressOf());
+
+            context->Draw(3, 0);
+        }
     }
 
-    context->OMSetBlendState(renderer->pDefaultBS.Get(), nullptr, 0xFFFFFFFF);
+    // --- Upsample chain ---
+    {
+        // Switch to additive blending here for the upsample chain
+        context->OMSetBlendState(renderer->blend_states[BLEND_ADDITIVE].Get(), nullptr, 0xFFFFFFFF);
+
+        // Bind the appropriate shader pipeline for the upsample
+        ShaderPipeline *upsample_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->bloom_upsample_shader);
+        shader::bind_pipeline(&renderer->shader_system, context, upsample_pipeline);
+
+        for (int i = (int)mip_count - 2; i >= 0; --i) {
+            Texture *current_mip = bloom_mips[i];
+
+            // Update texel size for the current target mip
+            bloom_constants.texel_size[0] = 1.0f / current_mip->width;
+            bloom_constants.texel_size[1] = 1.0f / current_mip->height;
+
+            // Also modulate the strength of the current "layer"
+            int upsample_idx = mip_count - 2 - i;
+            float t = upsample_idx / float(mip_count - 2);
+            float smoothstep = t * t * (3.0f - 2.0f * t);
+            bloom_constants.bloom_mip_strength = std::lerp(1.0f, 0.2f, smoothstep);
+
+            context->Map(renderer->bloom_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+            memcpy(mapped.pData, &bloom_constants, sizeof(BloomConstants));
+            context->Unmap(renderer->bloom_cb_ptr.Get(), 0);
+
+            // Update the bound render target and DON'T clear it, so it can blend additively
+            context->OMSetRenderTargets(1, current_mip->rtv[0].GetAddressOf(), nullptr);
+
+            // Update the viewport to the new size
+            viewport.Width = (float)current_mip->width;
+            viewport.Height = (float)current_mip->height;
+            context->RSSetViewports(1, &viewport);
+
+            // Bind the previous mip as the input
+            context->PSSetShaderResources(0, 1, bloom_mips[i + 1]->srv.GetAddressOf());
+
+            context->Draw(3, 0);
+        }
+    }
 
     END_D3D11_EVENT(renderer);
 }
@@ -1324,7 +1287,7 @@ void renderer::render_fxaa_pass(Renderer *renderer) {
     ID3D11ShaderResourceView *srvs[] = {scene_srv};
     renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-    context->PSSetConstantBuffers(0, 1, renderer->fxaa_cb_ptr.GetAddressOf());
+    context->PSSetConstantBuffers(1, 1, renderer->fxaa_cb_ptr.GetAddressOf());
 
     D3D11_VIEWPORT viewport = {};
     viewport.Width = (float)fxaa_texture->width;
@@ -1336,61 +1299,61 @@ void renderer::render_fxaa_pass(Renderer *renderer) {
     context->Draw(3, 0);
 }
 
-void renderer::render_tonemap_pass(Renderer *renderer) {
+void renderer::render_tonemap_pass(Renderer *renderer, Texture *scene_color, Texture *bloom_texture, Texture *out_rt) {
+    BEGIN_D3D11_EVENT(renderer, L"Tonemap Pass");
+
+    ID3D11DeviceContext *context = renderer->pContext.Get();
+    float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+
+    // Bind the states
+    context->OMSetDepthStencilState(renderer->depth_states[DEPTH_NONE].Get(), 0);
+    context->RSSetState(renderer->rasterizer_states[RASTER_SOLID_BACKFACE].Get());
+    context->OMSetBlendState(renderer->blend_states[BLEND_OPAQUE].Get(), nullptr, 0xFFFFFFFF);
+
+    // Clear and bind the the render target, no depth 
+    context->ClearRenderTargetView(out_rt->rtv[0].Get(), clear_color);
+    context->OMSetRenderTargets(1, out_rt->rtv[0].GetAddressOf(), nullptr); 
+
     // Bind the shader for the tonemap pass
     ShaderPipeline *tonemap_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->tonemap_shader);
     shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), tonemap_pipeline);
 
-    // TODO: We are not setting the primitive topology anywhere visible, only in mesh::draw
-    // which is fine for now as D3D11 is a statemachine so we are keeping that state
-    // but we should probably set it somewhere explicitly and clearly.
-    // context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    // Bind the sampler state
+    context->PSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
 
-    // Binding the second ping-pong texture as render target
-    Texture *pp1 = texture::get(renderer, renderer->ping_pong_color1);
-    renderer->pContext->OMSetRenderTargets(1, pp1->rtv[0].GetAddressOf(), nullptr);
-
-    // Bind previous render target as texture
-    // Texture *scene_color_tex = &renderer->textures[renderer->fxaa_color.id];
-    // Texture *scene_color_tex = &renderer->textures[renderer->scene_color.id];
-    Texture *scene_color_tex = &renderer->textures[renderer->resolved_color.id];
-    Texture *bloom_tex = &renderer->textures[renderer->bloom_mips[0].id];
-    ID3D11ShaderResourceView *srvs[] = {scene_color_tex->srv.Get(), bloom_tex->srv.Get()};
-    renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-
+    // Set the viewport
     D3D11_VIEWPORT viewport = {};
-    // TODO: These should be sizes not for INPUT but OUTPUT textures, but it's
-    // basically the same for now
-    viewport.Width = (float)scene_color_tex->width;
-    viewport.Height = (float)scene_color_tex->height;
+    viewport.Width = (float)out_rt->width;
+    viewport.Height = (float)out_rt->height;
     viewport.MinDepth = 0.0f;
     viewport.MaxDepth = 1.0f;
     renderer->pContext->RSSetViewports(1, &viewport);
 
-    // Draw the triangle
-    renderer->pContext->Draw(3, 0);
+    // Bind the SRV's for the scene buffer and the bloom pass output 
+    ID3D11ShaderResourceView *srvs[] = {
+        scene_color->srv.Get(),
+        bloom_texture->srv.Get(),
+    };
+    context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-    // This might be required by D3D11 to unbind resources before we use it as
-    // render targets again but so far there is no complaining so just leaving
-    // it here as a reminder if something happens down the line...
-    // ID3D11ShaderResourceView *nullSRVs[1] = {nullptr};
-    // renderer->pContext->PSSetShaderResources(0, 1, nullSRVs);
+    // Draw the triangle
+    context->Draw(3, 0);
+
+    END_D3D11_EVENT(renderer)
 }
 
-void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
+void renderer::render_skybox(Renderer *renderer, Texture *skybox, Texture *depth, Texture *rt) {
     BEGIN_D3D11_EVENT(renderer, L"Skybox");
 
     ID3D11DeviceContext *context = renderer->pContext.Get();
 
     // Bind the states
-    context->OMSetDepthStencilState(renderer->depth_states[DEPTH_EQUAL_ONLY].Get(), 0);
+    context->OMSetDepthStencilState(renderer->depth_states[DEPTH_LESS_EQUAL_NO_WRITE].Get(), 0);
     context->RSSetState(renderer->rasterizer_states[RASTER_SOLID_FRONTFACE].Get());
     context->OMSetBlendState(renderer->blend_states[BLEND_OPAQUE].Get(), nullptr, 0xFFFFFFFF);
 
     // Bind the render target and depth without clearing
-    Texture *scene_rt = texture::get(renderer, renderer->scene_color);
-    Texture *depth = texture::get(renderer, renderer->z_depth);
-    context->OMSetRenderTargets(1, scene_rt->rtv[0].GetAddressOf(), depth->dsv.Get());
+    context->OMSetRenderTargets(1, rt->rtv[0].GetAddressOf(), depth->dsv.Get());
 
     // Bind the skybox shader
     ShaderPipeline *skybox_shader = shader::get_pipeline(&renderer->shader_system, renderer->skybox_shader);
@@ -1400,19 +1363,7 @@ void renderer::render_skybox(Renderer *renderer, SceneCamera *camera) {
     context->PSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
 
     // Bind the environment map as a texture
-    Texture *env_map = &renderer->textures[renderer->cubemap_id.id];
-    context->PSSetShaderResources(0, 1, env_map->srv.GetAddressOf());
-
-    // Set the camera view and projections
-    CBSkybox skybox_cb = {};
-    skybox_cb.view_matrix = scene::camera_get_view_matrix(camera);
-    skybox_cb.projection_matrix = scene::camera_get_projection_matrix(camera);
-
-    D3D11_MAPPED_SUBRESOURCE mapped;
-    context->Map(renderer->skybox_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-    memcpy(mapped.pData, &skybox_cb, sizeof(CBSkybox));
-    context->Unmap(renderer->skybox_cb_ptr.Get(), 0);
-    context->VSSetConstantBuffers(1, 1, renderer->skybox_cb_ptr.GetAddressOf());
+    context->PSSetShaderResources(0, 1, skybox->srv.GetAddressOf());
 
     // Draw cube hardcoded into vertex shader
     context->Draw(36, 0);
@@ -1514,7 +1465,7 @@ void renderer::render_forward_plus_opaque(Renderer *renderer, Scene *scene) {
             }
 
             // Bind the material's values and textures
-            material::bind(renderer, mat, ARRAYSIZE(env_srvs));
+            material::bind(renderer, mat, 1, ARRAYSIZE(env_srvs));
 
             // Update the currently bound material
             current_material_bound = mat->id;
@@ -1536,17 +1487,35 @@ void renderer::render_forward_plus_opaque(Renderer *renderer, Scene *scene) {
     END_D3D11_EVENT(renderer);
 }
 
-void renderer::render_post_process(Renderer *renderer) {
+void renderer::render_post_process(Renderer *renderer, Texture *in_tex, ID3D11RenderTargetView *out) {
+    BEGIN_D3D11_EVENT(renderer, L"Post Pass");
+
+    ID3D11DeviceContext *context = renderer->pContext.Get();
+    float clear_color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+
+    // Bind pipeline states
+    context->OMSetDepthStencilState(renderer->depth_states[DEPTH_NONE].Get(), 0);
+    context->RSSetState(renderer->rasterizer_states[RASTER_SOLID_BACKFACE].Get());
+    context->OMSetBlendState(renderer->blend_states[BLEND_OPAQUE].Get(), nullptr, 0xFFFFFFFF);
+    
+    // Clear and bind the the render target, no depth 
+    context->ClearRenderTargetView(out, clear_color);
+    context->OMSetRenderTargets(1, &out, nullptr); 
+
+    // Bind shader pipeline
     ShaderPipeline *post_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->post_shader);
     shader::bind_pipeline(&renderer->shader_system, renderer->pContext.Get(), post_pipeline);
 
-    // Bind previous render target as texture
-    Texture *tonemap_color_tex = texture::get(renderer, renderer->ping_pong_color1);
-    ID3D11ShaderResourceView *srvs[] = {tonemap_color_tex->srv.Get()};
-    renderer->pContext->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+    // Bind the samplers
+    context->PSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
+
+    // Bind the the input map as a texture
+    context->PSSetShaderResources(0, 1, in_tex->srv.GetAddressOf());
 
     // Draw the triangle
-    renderer->pContext->Draw(3, 0);
+    context->Draw(3, 0);
+
+    END_D3D11_EVENT(renderer);
 }
 
 void renderer::bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv) {
@@ -2025,10 +1994,6 @@ ID3D11Device *renderer::get_device(Renderer *renderer) {
     return renderer->pDevice.Get();
 }
 
-void renderer::set_debug_flag(GbufferDebugState state) {
-    debug_flag = state;
-}
-
 static bool create_default_shaders(Renderer *renderer) {
     // Create default fullscreen triangle shader module
     renderer->fullscreen_triangle_vs = shader::create_module_from_file(
@@ -2122,6 +2087,13 @@ static bool create_pipeline_states(Renderer *renderer, ID3D11Device *device) {
             desc.DepthFunc = D3D11_COMPARISON_EQUAL;
             desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
             device->CreateDepthStencilState(&desc, &renderer->depth_states[DEPTH_EQUAL_ONLY]);
+        }
+
+        {
+            CD3D11_DEPTH_STENCIL_DESC desc = base;
+            desc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+            desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+            device->CreateDepthStencilState(&desc, &renderer->depth_states[DEPTH_LESS_EQUAL_NO_WRITE]);
         }
     }
 

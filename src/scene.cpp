@@ -111,6 +111,7 @@ SceneId scene::add_camera(Scene *scene, float fov, float znear, float zfar, Dire
     // Set matrices to dirty explicitly
     cam->is_view_dirty = true;
     cam->is_projection_dirty = true;
+    cam->is_view_projection_dirty = true;
 
     return cam->id;
 }
@@ -229,15 +230,13 @@ DirectX::XMFLOAT4X4 scene::camera_get_view_projection_matrix(SceneCamera *camera
 
     // TODO: First part could be refactored into a separate camera_update_matrices(SceneCamera *camera);
     // function, so it is separate from the getter.
-    bool vp_needs_recalc = false;
-
     if (camera->is_view_dirty) {
         DirectX::XMMATRIX view_matrix;
         view_matrix = DirectX::XMMatrixLookAtLH(DirectX::XMLoadFloat3(&camera->position), DirectX::XMLoadFloat3(&camera->target), DirectX::XMLoadFloat3(&camera->up));
         DirectX::XMStoreFloat4x4(&camera->view_matrix, view_matrix);
 
         camera->is_view_dirty = false;
-        vp_needs_recalc = true;
+        camera->is_view_projection_dirty = true;
     }
 
     if (camera->is_projection_dirty) {
@@ -248,12 +247,13 @@ DirectX::XMFLOAT4X4 scene::camera_get_view_projection_matrix(SceneCamera *camera
         DirectX::XMStoreFloat4x4(&camera->projection_matrix, projection_matrix);
 
         camera->is_projection_dirty = false;
-        vp_needs_recalc = true;
+        camera->is_view_projection_dirty = true;
     }
 
-    if (vp_needs_recalc) {
+    if (camera->is_view_projection_dirty) {
         DirectX::XMMATRIX vp_matrix = DirectX::XMLoadFloat4x4(&camera->view_matrix) * DirectX::XMLoadFloat4x4(&camera->projection_matrix);
         DirectX::XMStoreFloat4x4(&camera->view_projection_matrix, vp_matrix);
+        camera->is_view_projection_dirty = false;
     }
 
     return camera->view_projection_matrix;
@@ -265,7 +265,9 @@ DirectX::XMFLOAT4X4 scene::camera_get_view_matrix(SceneCamera *camera) {
     if (camera->is_view_dirty) {
         DirectX::XMMATRIX view_matrix = DirectX::XMMatrixLookAtLH(DirectX::XMLoadFloat3(&camera->position), DirectX::XMLoadFloat3(&camera->target), DirectX::XMLoadFloat3(&camera->up));
         DirectX::XMStoreFloat4x4(&camera->view_matrix, view_matrix);
+
         camera->is_view_dirty = false;
+        camera->is_view_projection_dirty = true;
     }
 
     return camera->view_matrix;
@@ -282,6 +284,7 @@ DirectX::XMFLOAT4X4 scene::camera_get_projection_matrix(SceneCamera *camera) {
         DirectX::XMStoreFloat4x4(&camera->projection_matrix, projection_matrix);
 
         camera->is_projection_dirty = false;
+        camera->is_view_projection_dirty = true;
     }
 
     return camera->projection_matrix;

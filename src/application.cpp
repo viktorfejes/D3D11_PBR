@@ -123,28 +123,6 @@ void application::update() {
         // Set the new yaw and pitch
         scene::camera_set_yaw_pitch(&pState->scenes[0], pState->scenes[0].active_cam->id, yaw, pitch);
     }
-
-    if (input::is_key_pressed(KEY_0)) {
-        renderer::set_debug_flag(GBUFFER_FULL);
-    }
-    if (input::is_key_pressed(KEY_1)) {
-        renderer::set_debug_flag(GBUFFER_ALBEDO);
-    }
-    if (input::is_key_pressed(KEY_2)) {
-        renderer::set_debug_flag(GBUFFER_ROUGHNESS);
-    }
-    if (input::is_key_pressed(KEY_3)) {
-        renderer::set_debug_flag(GBUFFER_NORMAL);
-    }
-    if (input::is_key_pressed(KEY_4)) {
-        renderer::set_debug_flag(GBUFFER_METALLIC);
-    }
-    if (input::is_key_pressed(KEY_5)) {
-        renderer::set_debug_flag(GBUFFER_EMISSIVE);
-    }
-    if (input::is_key_pressed(KEY_6)) {
-        renderer::set_debug_flag(GBUFFER_WORLD_POSITION);
-    }
 }
 
 void application::run() {
