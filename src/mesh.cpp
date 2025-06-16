@@ -36,7 +36,7 @@ MeshId mesh::load(const char *filename) {
     // Get the device through the application from the renderer
     // This way it doesn't need to be passed in and for these
     // loaders it's more ergonomic not to have to do that IMHO.
-    ID3D11Device *device = renderer->pDevice.Get();
+    ID3D11Device *device = renderer->device.Get();
 
     // Check if we can find an empty slot for our mesh
     // by linear search (which for this size is probably the best)

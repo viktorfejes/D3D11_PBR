@@ -6,41 +6,12 @@ struct VS_Output {
     float2 uv : TEXCOORD0;
 };
 
-float2 BarrelDistortion(float2 uv, float strength) {
-    float2 centered = uv * 2.0 - 1.0;
-    float r2 = dot(centered, centered);
-    centered *= 1.0 + strength * r2;
-    return (centered * 0.5) + 0.5;
-}
-
-float2 curve_remap_uv(float2 uv, float curvature) {
-    uv = uv * 2.0 - 1.0;
-    float2 offset = abs(uv.yx) / curvature;
-    uv += uv * offset * offset;
-    uv = uv * 0.5 + 0.5;
-    return uv;
-}
-
 float4 main(VS_Output input) : SV_TARGET {
-    const float distortion_strength = 0.5;
-    const float aberration_strength = 0.002;
+    const float distortion_strength = 0.3;
+    const float scale_factor = 0.25;
+    const float aberration_strength = 0.02;
 
     float2 uv = input.uv;
-
-//  float2 curved_uv = curve_remap_uv(uv, 4.0);
-
-//  // If UV is out of bounds, kill pixel
-//  if (curved_uv.x < 0.0 || curved_uv.x > 1.0 || curved_uv.y < 0.0 || curved_uv.y > 1.0) {
-//      return float4(0, 0, 0, 1);
-//  }
-
-//  float2 red_uv = curved_uv + float2(aberration_strength, 0.0);
-//  float2 green_uv = curved_uv;
-//  float2 blue_uv = curved_uv - float2(aberration_strength, 0.0);
-
-//  float r = scene_tex.Sample(samp, saturate(red_uv)).r;
-//  float g = scene_tex.Sample(samp, saturate(green_uv)).g;
-//  float b = scene_tex.Sample(samp, saturate(blue_uv)).b;
 
     float2 centered_uv = uv - 0.5;
 
@@ -57,6 +28,9 @@ float4 main(VS_Output input) : SV_TARGET {
     // Higher powers create more corner-focused distortion
     float distortion_factor = 1.0 + distortion_strength * dist_from_center * dist_from_center;
 
+    float scale = 1.0 - distortion_strength * scale_factor;
+    centered_uv *= scale;
+
     // Apply distortion
     float2 distorted_uv = centered_uv * distortion_factor;
 
@@ -66,7 +40,21 @@ float4 main(VS_Output input) : SV_TARGET {
     // Move back to 0-1 UV space
     distorted_uv += 0.5;
 
-    return float4(scene_tex.Sample(samp, distorted_uv).rgb, 1.0);
+    // Calculate chromatic aberration offset based on distance from center
+    float aberration_factor = aberration_strength * dist_from_center * dist_from_center;
+
+    // Calculate direction from center
+    float2 aberration_direction = normalize(centered_uv);
+
+    float2 red_uv = distorted_uv + aberration_direction * aberration_factor;
+    float2 green_uv = distorted_uv;
+    float2 blue_uv = distorted_uv - aberration_direction * aberration_factor * 0.5;
+
+    float r = scene_tex.Sample(samp, red_uv).r;
+    float g = scene_tex.Sample(samp, green_uv).g;
+    float b = scene_tex.Sample(samp, blue_uv).b;
+
+    return float4(r, g, b, 1.0);
 }
 
 

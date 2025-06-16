@@ -120,7 +120,7 @@ void scene::bind_mesh_instance(Renderer *renderer, Scene *scene, Id mesh_instanc
     D3D11_MAPPED_SUBRESOURCE map;
 
     // Update per object constant buffer
-    HRESULT hr = renderer->pContext->Map(renderer->pCBPerObject.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
+    HRESULT hr = renderer->context->Map(renderer->pCBPerObject.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &map);
     if (FAILED(hr)) {
         LOG("%s: Failed to map per object constant buffer", __func__);
         return;
@@ -131,8 +131,8 @@ void scene::bind_mesh_instance(Renderer *renderer, Scene *scene, Id mesh_instanc
     perObjectPtr->worldMatrix = scene::mesh_get_world_matrix(scene, mesh_instance_id);
     perObjectPtr->worldInvTrans = scene::mesh_get_world_inv_transpose_matrix(scene, mesh_instance_id);
 
-    renderer->pContext->Unmap(renderer->pCBPerObject.Get(), 0);
-    renderer->pContext->VSSetConstantBuffers((UINT)start_slot, 1, renderer->pCBPerObject.GetAddressOf());
+    renderer->context->Unmap(renderer->pCBPerObject.Get(), 0);
+    renderer->context->VSSetConstantBuffers((UINT)start_slot, 1, renderer->pCBPerObject.GetAddressOf());
 }
 
 DirectX::XMFLOAT3 scene::mesh_get_rotation(Scene *scene, SceneId scene_mesh_id) {

@@ -58,7 +58,7 @@ Material *material::get(Renderer *renderer, MaterialId material_id) {
 
 void material::bind(Renderer *renderer, Material *material, uint8_t start_cb, uint8_t start_tex) {
     D3D11_MAPPED_SUBRESOURCE mappedResource;
-    HRESULT hr = renderer->pContext->Map(renderer->pCBPerMaterial.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
+    HRESULT hr = renderer->context->Map(renderer->pCBPerMaterial.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResource);
     if (FAILED(hr)) {
         LOG("%s: Failed to map per material constant buffer", __func__);
         return;
@@ -70,8 +70,8 @@ void material::bind(Renderer *renderer, Material *material, uint8_t start_cb, ui
     cb_ptr->metallic_value = material->metallic_value;
     cb_ptr->roughness_value = material->roughness_value;
 
-    renderer->pContext->Unmap(renderer->pCBPerMaterial.Get(), 0);
-    renderer->pContext->PSSetConstantBuffers((UINT)start_cb, 1, renderer->pCBPerMaterial.GetAddressOf());
+    renderer->context->Unmap(renderer->pCBPerMaterial.Get(), 0);
+    renderer->context->PSSetConstantBuffers((UINT)start_cb, 1, renderer->pCBPerMaterial.GetAddressOf());
 
     // Look up the texture based on the id
     Texture *albedo_tex = texture::get(renderer, material->albedo_texture);
@@ -87,5 +87,5 @@ void material::bind(Renderer *renderer, Material *material, uint8_t start_cb, ui
         normal_tex->srv.Get(),
         emission_tex->srv.Get(),
     };
-    renderer->pContext->PSSetShaderResources((UINT)start_tex, ARRAYSIZE(srvs), srvs);
+    renderer->context->PSSetShaderResources((UINT)start_tex, ARRAYSIZE(srvs), srvs);
 }

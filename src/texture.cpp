@@ -3,6 +3,7 @@
 #include "application.hpp"
 #include "id.hpp"
 #include "logger.hpp"
+#include "mesh.hpp"
 #include "renderer.hpp"
 
 #include <comdef.h>
@@ -50,7 +51,7 @@ TextureId texture::load(const char *filename, bool is_srgb) {
 
 TextureId texture::load_hdr(const char *filename) {
     int h, w, c;
-    float *hdr_data = stbi_loadf(filename, &w, &h, &c, 3);
+    float *hdr_data = stbi_loadf(filename, &w, &h, &c, 4);
     if (!hdr_data) {
         LOG("texture::load_hdr: stbi_load didn't return with expected data");
         return id::invalid();
@@ -58,11 +59,11 @@ TextureId texture::load_hdr(const char *filename) {
 
     // Create the texture
     TextureId new_tex = create(w, h,
-                               DXGI_FORMAT_R32G32B32_FLOAT,
+                               DXGI_FORMAT_R32G32B32A32_FLOAT,
                                D3D11_BIND_SHADER_RESOURCE,
                                true,
                                hdr_data,
-                               w * 3 * sizeof(float),
+                               w * 4 * sizeof(float),
                                1,
                                1,
                                1,
@@ -114,7 +115,7 @@ TextureId texture::load_from_data(uint8_t *image_data, uint16_t width, uint16_t 
     data.SysMemPitch = t->width * 4;
 
     // Create the texture
-    HRESULT hr = renderer->pDevice->CreateTexture2D(&desc, &data, t->texture.GetAddressOf());
+    HRESULT hr = renderer->device->CreateTexture2D(&desc, &data, t->texture.GetAddressOf());
     if (FAILED(hr)) {
         LOG("texture::load_from_data: Failed to create Texture2D on the gpu");
         stbi_image_free(image_data);
@@ -130,7 +131,7 @@ TextureId texture::load_from_data(uint8_t *image_data, uint16_t width, uint16_t 
     srv_desc.Texture2D.MostDetailedMip = 0;
 
     // Create the SRV
-    hr = renderer->pDevice->CreateShaderResourceView((ID3D11Resource *)t->texture.Get(), &srv_desc, t->srv.GetAddressOf());
+    hr = renderer->device->CreateShaderResourceView((ID3D11Resource *)t->texture.Get(), &srv_desc, t->srv.GetAddressOf());
     if (FAILED(hr)) {
         LOG("texture::load_from_data: Failed to create Shader Resource View for texture");
         return id::invalid();
@@ -170,7 +171,7 @@ TextureId texture::create(uint16_t width,
         return id::invalid();
     }
 
-    if (!create_texture_internal(renderer->pDevice.Get(), t,
+    if (!create_texture_internal(renderer->device.Get(), t,
                                  width, height,
                                  mip_levels, array_size,
                                  format,
@@ -196,10 +197,120 @@ TextureId texture::create(uint16_t width,
     return t->id;
 }
 
+TextureId texture::create_from_backbuffer(ID3D11Device1 *device, IDXGISwapChain3 *swapchain) {
+    // Get a pointer to the renderer as that is our registry for textures.
+    // Textures currently only exist as GPU data, so it makes sense. For now
+    Renderer *renderer = application::get_renderer();
+
+    // Check if we can find an empty slot for our texture
+    // by linear search (which for this size is probably the best)
+    Texture *t = nullptr;
+    for (uint8_t i = 0; i < MAX_TEXTURES; ++i) {
+        if (id::is_invalid(renderer->textures[i].id)) {
+            t = &renderer->textures[i];
+            t->id.id = i;
+            break;
+        }
+    }
+
+    if (t == nullptr) {
+        LOG("%s: Max textures reached, adjust max texture count.", __func__);
+        return id::invalid();
+    }
+
+    // Get the backbuffer from the swapchain
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> backbuffer;
+    HRESULT hr = swapchain->GetBuffer(0, IID_PPV_ARGS(backbuffer.GetAddressOf()));
+    if (FAILED(hr)) {
+        LOG("%s: Couldn't get the backbuffer from the swapchain", __func__);
+        id::invalidate(&t->id);
+        return id::invalid();
+    }
+
+    hr = device->CreateRenderTargetView(backbuffer.Get(), nullptr, t->rtv[0].GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("%s: Failed to create RTV for the backbuffer", __func__);
+        id::invalidate(&t->id);
+        return id::invalid();
+    }
+
+    // Get texture description to populate the texture struct
+    D3D11_TEXTURE2D_DESC desc;
+    backbuffer->GetDesc(&desc);
+
+    t->width = desc.Width;
+    t->height = desc.Height;
+    t->format = desc.Format;
+    t->mip_levels = desc.MipLevels;
+    t->array_size = desc.ArraySize;
+    t->has_srv = false; // Not creating one now
+    t->msaa_samples = desc.SampleDesc.Count;
+    t->is_cubemap = false; // Backbuffers are never cubemaps
+    t->bind_flags = desc.BindFlags;
+
+    return t->id;
+}
+
+bool texture::resize_swapchain(TextureId texture_id, ID3D11Device1 *device, ID3D11DeviceContext1 *context, IDXGISwapChain3 *swapchain, uint32_t width, uint32_t height) {
+    Renderer *renderer = application::get_renderer();
+
+    Texture *swapchain_texture = get(renderer, texture_id);
+    if (!swapchain_texture) {
+        return false;
+    }
+
+    ID3D11RenderTargetView *nullViews[5] = {nullptr};
+    context->OMSetRenderTargets(_countof(nullViews), nullViews, nullptr);
+
+    // Release COM references before resizing
+    swapchain_texture->rtv[0].Reset();
+    swapchain_texture->texture.Reset();
+
+    // context->ClearState();
+    // context->Flush();
+
+    // {
+    //     Microsoft::WRL::ComPtr<ID3D11Texture2D> temp_check;
+    //     swapchain->GetBuffer(0, IID_PPV_ARGS(&temp_check));
+    //     temp_check->AddRef();
+    //     ULONG refs = temp_check->Release();
+    //     LOG("Backbuffer ref count: %lu", refs);
+    // }
+
+    HRESULT hr = swapchain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+    if (FAILED(hr)) {
+        LOG("%s: Failed to resize buffers", __func__);
+        return false;
+    }
+
+    // Get the backbuffer from the swapchain
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> backbuffer;
+    hr = swapchain->GetBuffer(0, IID_PPV_ARGS(backbuffer.GetAddressOf()));
+    if (FAILED(hr)) {
+        LOG("%s: Couldn't get the backbuffer from the swapchain", __func__);
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC bb_desc = {};
+    backbuffer->GetDesc(&bb_desc);
+
+    // Recreate the render target view
+    hr = device->CreateRenderTargetView(backbuffer.Get(), nullptr, swapchain_texture->rtv[0].GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("%s: Failed to create RTV for the backbuffer", __func__);
+        return false;
+    }
+
+    // If we get here change the width and height of the texture
+    swapchain_texture->width = width;
+    swapchain_texture->height = height;
+
+    return true;
+}
+
 // TODO: For now, resize only concerns the size of the texture, nothing else...
 bool texture::resize(TextureId id, uint16_t width, uint16_t height) {
     Renderer *renderer = application::get_renderer();
-
     Texture *t = get(renderer, id);
     if (!t) {
         return false;
@@ -207,7 +318,7 @@ bool texture::resize(TextureId id, uint16_t width, uint16_t height) {
 
     // Recreate the texture. Since I'm using ComPtr's I don't need to release
     // it before recreating it -- the smart pointer will take care of it
-    if (!create_texture_internal(renderer->pDevice.Get(), t,
+    if (!create_texture_internal(renderer->device.Get(), t,
                                  width, height,
                                  t->mip_levels, t->array_size,
                                  t->format,
@@ -243,7 +354,7 @@ static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint
             LOG("%s: MSAA textures can't have mipmaps", __func__);
             return false;
         }
-        
+
         // UAVs are not supported on multisampled texture
         if (bind_flags & D3D11_BIND_UNORDERED_ACCESS) {
             LOG("%s: UAVs are not supported on multisampled textures", __func__);
@@ -399,8 +510,8 @@ static bool create_texture_internal(ID3D11Device *device, Texture *texture, uint
 
 bool texture::export_to_file(TextureId texture, const char *filename) {
     Renderer *renderer = application::get_renderer();
-    ID3D11Device *device = renderer->pDevice.Get();
-    ID3D11DeviceContext *context = renderer->pContext.Get();
+    ID3D11Device *device = renderer->device.Get();
+    ID3D11DeviceContext *context = renderer->context.Get();
 
     // Fetch the texture
     Texture *tex = get(renderer, texture);

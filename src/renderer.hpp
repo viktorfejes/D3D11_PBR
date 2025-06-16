@@ -10,6 +10,7 @@
 #include <DirectXMath.h>
 #include <d3d11.h>
 #include <d3d11_1.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #define MAX_MESHES 32
@@ -127,24 +128,13 @@ struct Renderer {
     ShaderSystemState shader_system;
 
     // Graphics Context
-    Microsoft::WRL::ComPtr<ID3D11Device> pDevice;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> pContext;
-    Microsoft::WRL::ComPtr<IDXGISwapChain> pSwapChain;
+    Microsoft::WRL::ComPtr<ID3D11Device1> device;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext1> context;
+    Microsoft::WRL::ComPtr<IDXGISwapChain3> swapchain;
     Microsoft::WRL::ComPtr<ID3DUserDefinedAnnotation> annotation;
+    D3D_FEATURE_LEVEL featureLevel;
 
-    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> pRenderTargetView;
-    Microsoft::WRL::ComPtr<ID3D11DepthStencilView> pDepthStencilView;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> pDepthStencilBuffer;
-
-    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> pDepthStencilState;
-    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> skybox_depth_state;
-
-    // Temporary "global" sampler
-    Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler;
-    Microsoft::WRL::ComPtr<ID3D11SamplerState> skybox_sampler;
-
-    Microsoft::WRL::ComPtr<ID3D11RasterizerState> default_raster;
-    Microsoft::WRL::ComPtr<ID3D11RasterizerState> skybox_raster;
+    TextureId swapchain_texture;
 
     Microsoft::WRL::ComPtr<ID3D11Buffer> pCBPerObject;
     Microsoft::WRL::ComPtr<ID3D11Buffer> pCBPerFrame;
@@ -153,8 +143,6 @@ struct Renderer {
     // Blend states
     Microsoft::WRL::ComPtr<ID3D11BlendState> pDefaultBS;
     Microsoft::WRL::ComPtr<ID3D11BlendState> pAdditiveBS;
-
-    D3D_FEATURE_LEVEL featureLevel;
 
     Mesh meshes[MAX_MESHES];
     Material materials[MAX_MATERIALS];
@@ -257,7 +245,7 @@ void render_tonemap_pass(Renderer *renderer, Texture *scene_color, Texture *bloo
 void render_skybox(Renderer *renderer, Texture *skybox, Texture *depth, Texture *rt);
 void render_depth_prepass(Renderer *renderer, Scene *scene);
 void render_forward_plus_opaque(Renderer *renderer, Scene *scene);
-void render_post_process(Renderer *renderer, Texture *in_tex, ID3D11RenderTargetView *out);
+void render_post_process(Renderer *renderer, Texture *in_tex, Texture *out_tex);
 
 void bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv);
 void clear_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv, float *clear_color);

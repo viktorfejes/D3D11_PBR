@@ -1,14 +1,14 @@
 Texture2D source_tex : register(t0);
 SamplerState samp : register(s0);
 
-cbuffer PerFrameConstants : register(b0) {
-    row_major float4x4 view_matrix;
-    row_major float4x4 projection_matrix;
-    row_major float4x4 view_projection_matrix;
-    row_major float4x4 inv_view_projection_matrix;
-    float3 camera_position;
-    float _padding;
-};
+   cbuffer PerFrameConstants : register(b0) {
+       row_major float4x4 view_matrix;
+       row_major float4x4 projection_matrix;
+       row_major float4x4 view_projection_matrix;
+       row_major float4x4 inv_view_projection_matrix;
+       float3 camera_position;
+       float _padding;
+   };
 
 cbuffer BloomConstants : register(b1) {
     float2 texel_size;
