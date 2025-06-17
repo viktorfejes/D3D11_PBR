@@ -82,7 +82,7 @@ float compute_shadow(Texture2D shadow_atlas, SamplerState samp, float4 lightspac
         for (int x = -1; x <= 1; ++x) {
             float2 offset = float2(x, y) * texel_size;
             float sample = shadow_atlas.Sample(samp, uv + offset).r;
-            shadow += (depth - 0.001 < sample) ? 1.0 : 0.0;
+            shadow += (depth < sample - 0.001) ? 1.0 : 0.0;
         }
     }
 
@@ -130,7 +130,7 @@ float4 main(PSInput input) : SV_TARGET {
     float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
 
     // IBL Exposure EV
-    float ibl_exposure_ev = -10.0f;
+    float ibl_exposure_ev = -1.0f;
 
     // =======================================================
     // DIRECT LIGHTING
@@ -162,7 +162,7 @@ float4 main(PSInput input) : SV_TARGET {
         float shadow = compute_shadow(shadow_atlas, samp, lightspace_pos);
 
         // HACK: Hardcoded color (the one after BRDF)
-        direct_lighting += BRDF * float3(1.0, 0.0, 0.0) * light.intensity * NdotL * shadow;
+        direct_lighting += BRDF * float3(1.0, 1.0, 1.0) * light.intensity * NdotL;
     }
 
     // =======================================================

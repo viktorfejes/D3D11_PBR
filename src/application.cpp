@@ -208,16 +208,30 @@ bool application::deserialize_config() {
             cJSON_GetArrayItem(albedo_color, 1)->valuedouble,
             cJSON_GetArrayItem(albedo_color, 2)->valuedouble, );
 
+        // Get the texture values
+        int albedo_tex_value = cJSON_GetObjectItem(mat, "albedo_map")->valueint;
+        int metallic_tex_value = cJSON_GetObjectItem(mat, "metallic_map")->valueint;
+        int roughness_tex_value = cJSON_GetObjectItem(mat, "roughness_map")->valueint;
+        int normal_tex_value = cJSON_GetObjectItem(mat, "normal_map")->valueint;
+        int emission_tex_value = cJSON_GetObjectItem(mat, "emission_map")->valueint;
+
+        // If the texture value is -1 (or less than 0), we fetch the appropriate default texture instead
+        Id albedo_tex = albedo_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, albedo_tex_value);
+        Id metallic_tex = metallic_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, metallic_tex_value);
+        Id roughness_tex = roughness_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, roughness_tex_value);
+        Id normal_tex = normal_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, normal_tex_value);
+        Id emission_tex = emission_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, emission_tex_value);
+
         Id mat_id = material::create(
             albedo,
-            idmap::get(&tex_map, cJSON_GetObjectItem(mat, "albedo_map")->valueint),
+            albedo_tex,
             metallic,
-            idmap::get(&tex_map, cJSON_GetObjectItem(mat, "metallic_map")->valueint),
+            metallic_tex,
             roughness,
-            idmap::get(&tex_map, cJSON_GetObjectItem(mat, "roughness_map")->valueint),
-            idmap::get(&tex_map, cJSON_GetObjectItem(mat, "normal_map")->valueint),
+            roughness_tex,
+            normal_tex,
             emission_intensity,
-            idmap::get(&tex_map, cJSON_GetObjectItem(mat, "emission_map")->valueint));
+            emission_tex);
 
         idmap::add(&mat_map, id, mat_id);
     }

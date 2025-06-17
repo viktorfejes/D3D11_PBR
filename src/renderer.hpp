@@ -153,7 +153,11 @@ struct Renderer {
 
     Mesh meshes[MAX_MESHES];
     Material materials[MAX_MATERIALS];
+
     Texture textures[MAX_TEXTURES];
+    TextureId amre_fallback_texture;
+    TextureId normal_fallback_texture;
+
     Light lights[MAX_LIGHTS];
 
     /** @brief Pointer to the current window */

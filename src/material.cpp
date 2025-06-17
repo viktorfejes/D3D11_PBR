@@ -36,11 +36,11 @@ MaterialId material::create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, f
     mat->emission_intensity = emission_intensity;
 
     // Material textures
-    mat->albedo_texture = albedo_texture;
-    mat->metallic_texture = metallic_texture;
-    mat->roughness_texture = roughness_texture;
-    mat->normal_texture = normal_texture;
-    mat->emission_texture = emission_texture;
+    mat->albedo_texture = id::is_invalid(albedo_texture) ? renderer->amre_fallback_texture : albedo_texture;
+    mat->metallic_texture = id::is_invalid(metallic_texture) ? renderer->amre_fallback_texture : metallic_texture;
+    mat->roughness_texture = id::is_invalid(roughness_texture) ? renderer->amre_fallback_texture : roughness_texture;
+    mat->normal_texture = id::is_invalid(normal_texture) ? renderer->normal_fallback_texture : normal_texture;
+    mat->emission_texture = id::is_invalid(emission_texture) ? renderer->amre_fallback_texture : emission_texture;
 
     return mat->id;
 }

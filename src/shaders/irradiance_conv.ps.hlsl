@@ -22,65 +22,49 @@ float3 getDirection(uint faceIndex, float2 uv) {
     return normalize(dir);
 }
 
-// Van der Corput sequence for better sample distribution
-float radicalInverse_VdC(uint bits) {
-    bits = (bits << 16u) | (bits >> 16u);
-    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
-    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
-    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
-    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
-    return float(bits) * 2.3283064365386963e-10; // / 0x100000000
-}
-
-float2 hammersley(uint i, uint N) {
-    return float2(float(i) / float(N), radicalInverse_VdC(i));
-}
-
-// Importance sampling for lambertian BRDF (cosine-weighted hemisphere)
-float3 importanceSampleGGX(float2 Xi, float3 N) {
-    // For lambertian BRDF, we want cosine-weighted hemisphere sampling
-    float phi = 2.0 * PI * Xi.x;
-    float cosTheta = sqrt(Xi.y);
-    float sinTheta = sqrt(1.0 - Xi.y);
-
-    // Spherical to cartesian coordinates
-    float3 H;
-    H.x = cos(phi) * sinTheta;
-    H.y = sin(phi) * sinTheta;
-    H.z = cosTheta;
-
-    // Tangent space to world space
-    float3 up = abs(N.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0);
-    float3 tangent = normalize(cross(up, N));
-    float3 bitangent = cross(N, tangent);
-
-    return tangent * H.x + bitangent * H.y + N * H.z;
-}
-
-float3 irradiance(float3 N) {
-    float3 irradiance = 0.0;
-    const uint SAMPLE_COUNT = 1024; // Increased for better quality
+// https://github.com/David-DiGioia/monet/blob/aaa548acdd0447f65d1598b9434a01d971e10cbc/shaders/cubemap_to_irradiance.frag
+float4 main(float4 pos : SV_POSITION) : SV_Target {
+    // Get UV coordinates from pixel position
+    const float resolution = 32.0f;     // TODO: resolution is still hardcoded...
+    float2 uv = pos.xy / resolution;
     
-    for (uint i = 0; i < SAMPLE_COUNT; ++i) {
-        float2 Xi = hammersley(i, SAMPLE_COUNT);
-        float3 L = importanceSampleGGX(Xi, N);
-        
-        float NdotL = max(dot(N, L), 0.0);
-        if (NdotL > 0.0) {
-            irradiance += envMap.SampleLevel(samp, L, 0).rgb * NdotL;
+    // Get the direction for this pixel (this is our normal)
+    float3 normal = getDirection(faceIndex, uv);
+    
+    float3 irradiance = float3(0.0, 0.0, 0.0);
+    
+    // Create tangent space basis
+    float3 up = float3(0.0, 1.0, 0.0);
+    float3 right = normalize(cross(up, normal));
+    up = cross(normal, right);
+    
+    float phiDelta = 0.025;
+    float thetaDelta = 0.025;
+    int nrSamples = 0;
+    
+    // Sample hemisphere around normal
+    for (float phi = 0.0; phi < 2.0 * PI; phi += phiDelta) {
+        for (float theta = 0.0; theta < 0.5 * PI; theta += thetaDelta) {
+            // Spherical to cartesian (in tangent space)
+            float3 tangentSample = float3(
+                sin(theta) * cos(phi), 
+                sin(theta) * sin(phi), 
+                cos(theta)
+            );
+            
+            // Tangent space to world space
+            float3 sampleVec = tangentSample.x * right + 
+                              tangentSample.y * up + 
+                              tangentSample.z * normal;
+            
+            // Sample environment map and weight by cosine and solid angle
+            irradiance += envMap.SampleLevel(samp, sampleVec, 0).rgb * cos(theta) * sin(theta);
+            nrSamples++;
         }
     }
     
-    // For cosine-weighted sampling, the PDF is NdotL/PI
-    // The integral of the rendering equation for lambertian BRDF becomes:
-    // irradiance = (1/N) * sum(L(wi) * NdotL / (NdotL/PI)) = PI * (1/N) * sum(L(wi))
-    return PI * irradiance / float(SAMPLE_COUNT);
-}
-
-float4 main(float4 pos : SV_POSITION) : SV_Target {
-    // Get viewport dimensions from system values if available
-    // Otherwise, I'll need to pass this as a constant buffer
-    float2 uv = pos.xy / 32.0;
-    float3 dir = getDirection(faceIndex, uv);
-    return float4(irradiance(dir), 1.0);
+    // Normalize the result
+    irradiance = PI * irradiance / float(nrSamples);
+    
+    return float4(irradiance, 1.0);
 }

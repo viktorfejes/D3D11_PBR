@@ -70,6 +70,8 @@ static bool resolve_msaa_texture(ID3D11DeviceContext *context, Texture *src, Tex
 static bool create_shadow_pass(Renderer *renderer, PipelineId *out_pipeline);
 static void render_shadow_pass(Renderer *renderer, Scene *scene, Texture *shadow_atlas);
 
+static bool create_fallback_textures(Renderer *renderer);
+
 bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     // Store pointer to window
     if (!pWindow) {
@@ -111,6 +113,12 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     // Create pipeline states
     if (!create_pipeline_states(renderer, renderer->device.Get())) {
         LOG("%s: Failed to create pipeline states for renderer", __func__);
+        return false;
+    }
+
+    // Create fallback textures
+    if (!create_fallback_textures(renderer)) {
+        LOG("%s: Failed to create fallback textures", __func__);
         return false;
     }
 
@@ -2386,4 +2394,26 @@ static void render_shadow_pass(Renderer *renderer, Scene *scene, Texture *shadow
     }
 
     END_D3D11_EVENT(renderer)
+}
+
+static bool create_fallback_textures(Renderer *renderer) {
+    // Create fallback texture for albedo, metallic, roughness, and emission
+    {
+        uint8_t data[4] = {255, 255, 255, 255};
+        renderer->amre_fallback_texture = texture::create(1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE, true, data, 4, 1, 1, 1, false);
+        if (id::is_invalid(renderer->amre_fallback_texture)) {
+            return false;
+        }
+    }
+
+    // Create fallback texture for normal map
+    {
+        uint8_t data[4] = {127, 127, 255, 255};
+        renderer->normal_fallback_texture = texture::create(1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_BIND_SHADER_RESOURCE, true, data, 4, 1, 1, 1, false);
+        if (id::is_invalid(renderer->normal_fallback_texture)) {
+            return false;
+        }
+    }
+
+    return true;
 }
