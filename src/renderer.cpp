@@ -12,6 +12,7 @@
 #include <d3dcommon.h>
 #include <d3dcompiler.h>
 #include <dxgiformat.h>
+#include <winerror.h>
 
 #define RENDERING_METHOD_FORWARD_PLUS 0
 #define RENDERING_METHOD_DEFERRED 1
@@ -59,11 +60,15 @@
 #endif
 
 // Static functions
+static bool setup_storage_state(Renderer *renderer);
 static bool create_device(ID3D11Device1 **device, ID3D11DeviceContext1 **context, D3D_FEATURE_LEVEL *out_feature_level);
 static bool create_swapchain(ID3D11Device1 *device, HWND hwnd, IDXGISwapChain3 **swapchain);
 static bool create_default_shaders(Renderer *renderer);
 static bool create_pipeline_states(Renderer *renderer, ID3D11Device *device);
 static bool resolve_msaa_texture(ID3D11DeviceContext *context, Texture *src, Texture *dst);
+
+static bool create_shadow_pass(Renderer *renderer, PipelineId *out_pipeline);
+static void render_shadow_pass(Renderer *renderer, Scene *scene, Texture *shadow_atlas);
 
 bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     // Store pointer to window
@@ -73,19 +78,9 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     }
     renderer->pWindow = pWindow;
 
-    // Invalidate all meshes
-    for (uint8_t i = 0; i < MAX_MESHES; ++i) {
-        id::invalidate(&renderer->meshes[i].id);
-    }
-
-    // Invalidate all materials
-    for (uint8_t i = 0; i < MAX_MATERIALS; ++i) {
-        id::invalidate(&renderer->materials[i].id);
-    }
-
-    // Invalidate all textures
-    for (uint8_t i = 0; i < MAX_TEXTURES; ++i) {
-        id::invalidate(&renderer->textures[i].id);
+    if (!setup_storage_state(renderer)) {
+        LOG("%s: Failed to setup storage state for renderer", __func__);
+        return false;
     }
 
     // Create the device
@@ -185,6 +180,12 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     renderer->skybox_shader = create_skybox_pipeline(renderer);
     if (id::is_invalid(renderer->skybox_shader)) {
         LOG("%s: Couldn't create skybox shader pipeline", __func__);
+        return false;
+    }
+
+    // Create shadow pass shader pipeline
+    if (!create_shadow_pass(renderer, &renderer->shadowpass_shader)) {
+        LOG("%s: Couldn't create Shadow Pass", __func__);
         return false;
     }
 
@@ -617,16 +618,32 @@ PipelineId renderer::create_gbuffer_pipeline(Renderer *renderer) {
 }
 
 PipelineId renderer::create_lighting_pass_pipeline(Renderer *renderer) {
-    D3D11_BUFFER_DESC cb_desc = {};
-    cb_desc.Usage = D3D11_USAGE_DYNAMIC;
-    cb_desc.ByteWidth = sizeof(CBLighting);
-    cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    ID3D11Device *device = renderer->device.Get();
 
-    HRESULT hr = renderer->device->CreateBuffer(&cb_desc, nullptr, renderer->lp_cb_ptr.GetAddressOf());
-    if (FAILED(hr)) {
-        LOG("Renderer error: Failed to create constant buffer for lighting pass");
-        return id::invalid();
+    // Create structured buffer for lights
+    {
+        D3D11_BUFFER_DESC desc = {};
+        desc.Usage = D3D11_USAGE_DYNAMIC;
+        desc.ByteWidth = sizeof(CBLight) * MAX_LIGHTS;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        desc.StructureByteStride = sizeof(CBLight);
+
+        HRESULT hr = device->CreateBuffer(&desc, nullptr, renderer->light_buffer.GetAddressOf());
+        assert(SUCCEEDED(hr) && "Failed to create structured buffer");
+    }
+
+    // Create resource view for structured buffer
+    {
+        D3D11_SHADER_RESOURCE_VIEW_DESC desc = {};
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        desc.Buffer.ElementOffset = 0;
+        desc.Buffer.NumElements = MAX_LIGHTS;
+
+        HRESULT hr = device->CreateShaderResourceView(renderer->light_buffer.Get(), &desc, renderer->light_srv.GetAddressOf());
+        assert(SUCCEEDED(hr) && "Failed to create SRV for structured buffer");
     }
 
     ShaderId lighting_pass_ps = shader::create_module_from_file(
@@ -644,14 +661,6 @@ PipelineId renderer::create_lighting_pass_pipeline(Renderer *renderer) {
         lighting_pass_modules,
         ARRAYSIZE(lighting_pass_modules),
         nullptr, 0);
-
-    renderer->lighting_rt = texture::create(
-        renderer->pWindow->width, renderer->pWindow->height,
-        DXGI_FORMAT_R16G16B16A16_FLOAT,
-        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-        true,
-        nullptr, 0,
-        1, 1, 1, false);
 
     return lighting_pass_pipeline;
 }
@@ -811,6 +820,9 @@ void renderer::end_frame(Renderer *renderer) {
 }
 
 void renderer::render(Renderer *renderer, Scene *scene) {
+    Texture *shadow_atlas = texture::get(renderer, renderer->shadow_atlas);
+    render_shadow_pass(renderer, scene, shadow_atlas);
+
 #if (RENDERING_METHOD == RENDERING_METHOD_FORWARD_PLUS)
     // Forward+ rendering
     render_depth_prepass(renderer, scene);
@@ -829,7 +841,7 @@ void renderer::render(Renderer *renderer, Scene *scene) {
     Texture *brdf_lut = texture::get(renderer, renderer->brdf_lut);
 
     render_gbuffer(renderer, scene, gbuffer_a, gbuffer_b, gbuffer_c, depth);
-    render_lighting_pass(renderer, gbuffer_a, gbuffer_b, gbuffer_c, depth, irradiance_map, prefilter_map, brdf_lut, scene_color);
+    render_lighting_pass(renderer, scene, gbuffer_a, gbuffer_b, gbuffer_c, depth, irradiance_map, prefilter_map, brdf_lut, shadow_atlas, renderer->light_srv.Get(), scene_color);
 #endif
 
     // Render the environment map
@@ -890,6 +902,14 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene,
     // Bind the samplers
     context->PSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
 
+    // Set up the viewport
+    D3D11_VIEWPORT vp = {};
+    vp.Width = static_cast<float>(rt0->width);
+    vp.Height = static_cast<float>(rt0->height);
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    context->RSSetViewports(1, &vp);
+
     // Render meshes
     MaterialId current_material_bound = id::invalid();
     for (int i = 0; i < MAX_SCENE_MESHES; ++i) {
@@ -936,9 +956,9 @@ void renderer::render_gbuffer(Renderer *renderer, Scene *scene,
     END_D3D11_EVENT(renderer);
 }
 
-void renderer::render_lighting_pass(Renderer *renderer, Texture *gbuffer_a, Texture *gbuffer_b, Texture *gbuffer_c, Texture *depth,
-                                    Texture *irradiance_map, Texture *prefilter_map, Texture *brdf_lut,
-                                    Texture *rt) {
+void renderer::render_lighting_pass(Renderer *renderer, Scene *scene, Texture *gbuffer_a, Texture *gbuffer_b, Texture *gbuffer_c, Texture *depth,
+                                    Texture *irradiance_map, Texture *prefilter_map, Texture *brdf_lut, Texture *shadow_atlas,
+                                    ID3D11ShaderResourceView *lights, Texture *rt) {
     BEGIN_D3D11_EVENT(renderer, L"Lighting Pass (Deferred)");
 
     ID3D11DeviceContext *context = renderer->context.Get();
@@ -960,6 +980,26 @@ void renderer::render_lighting_pass(Renderer *renderer, Texture *gbuffer_a, Text
     // Bind the samplers
     context->PSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
 
+    // Update the lights buffer
+    D3D11_MAPPED_SUBRESOURCE mapped = {};
+    context->Map(renderer->light_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+
+    CBLight *gpu_lights = reinterpret_cast<CBLight *>(mapped.pData);
+    for (int i = 0; i < MAX_SCENE_LIGHTS; ++i) {
+        LightInstance *light_inst = &scene->lights[i];
+        if (id::is_invalid(light_inst->id)) continue;
+
+        Light *light = light::get(renderer, light_inst->light_id);
+        if (!light) continue;
+
+        gpu_lights[i].direction = scene::light_get_direction(light_inst);
+        gpu_lights[i].intensity = light->intensity;
+        gpu_lights[i].view_projection_matrix = scene::light_get_view_projection_matrix(scene, light_inst->id);
+        gpu_lights[i].uv_rect = DirectX::XMFLOAT4(0, 0, 1, 1);
+    }
+
+    context->Unmap(renderer->light_buffer.Get(), 0);
+
     // Bind the SRV's including the gbuffer outputs and the IBL textures
     ID3D11ShaderResourceView *srvs[] = {
         gbuffer_a->srv.Get(),
@@ -969,6 +1009,8 @@ void renderer::render_lighting_pass(Renderer *renderer, Texture *gbuffer_a, Text
         irradiance_map->srv.Get(),
         prefilter_map->srv.Get(),
         brdf_lut->srv.Get(),
+        shadow_atlas->srv.Get(),
+        lights,
     };
     context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -1781,7 +1823,7 @@ void renderer::on_window_resize(Renderer *renderer, uint16_t width, uint16_t hei
         bmh = MAX(bmh / 2, 1);
         texture::resize(renderer->bloom_mips[i], bmw, bmh);
     }
-    
+
     // Resizing the ping-pong buffer
     texture::resize(renderer->ping_pong_color1, width, height);
 
@@ -1802,6 +1844,30 @@ void renderer::on_window_resize(Renderer *renderer, uint16_t width, uint16_t hei
 
 ID3D11Device *renderer::get_device(Renderer *renderer) {
     return renderer->device.Get();
+}
+
+static bool setup_storage_state(Renderer *renderer) {
+    // Invalidate all meshes
+    for (uint8_t i = 0; i < MAX_MESHES; ++i) {
+        id::invalidate(&renderer->meshes[i].id);
+    }
+
+    // Invalidate all materials
+    for (uint8_t i = 0; i < MAX_MATERIALS; ++i) {
+        id::invalidate(&renderer->materials[i].id);
+    }
+
+    // Invalidate all textures
+    for (uint8_t i = 0; i < MAX_TEXTURES; ++i) {
+        id::invalidate(&renderer->textures[i].id);
+    }
+
+    // Invalidate all Lights
+    for (uint8_t i = 0; i < MAX_LIGHTS; ++i) {
+        id::invalidate(&renderer->lights[i].id);
+    }
+
+    return true;
 }
 
 static bool create_device(ID3D11Device1 **device, ID3D11DeviceContext1 **context, D3D_FEATURE_LEVEL *out_feature_level) {
@@ -2164,4 +2230,160 @@ static bool resolve_msaa_texture(ID3D11DeviceContext *context, Texture *src, Tex
         src->format);
 
     return true;
+}
+
+static bool create_shadow_pass(Renderer *renderer, PipelineId *out_pipeline) {
+    // Create shadow pass atlas
+    renderer->shadow_atlas = texture::create(
+        1024, 1024,
+        DXGI_FORMAT_D24_UNORM_S8_UINT,
+        D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE,
+        true,
+        nullptr, 0,
+        1, 1, 1, false);
+
+    if (id::is_invalid(renderer->shadow_atlas)) {
+        LOG("%s: Couldn't create shadow atlas", __func__);
+        return false;
+    }
+
+    // Set up constant buffer for lights
+    {
+        D3D11_BUFFER_DESC desc = {};
+        desc.Usage = D3D11_USAGE_DYNAMIC;
+        desc.ByteWidth = sizeof(CBShadowPass);
+        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+        HRESULT hr = renderer->device->CreateBuffer(&desc, nullptr, renderer->shadowpass_cb_ptr.GetAddressOf());
+        if (FAILED(hr)) {
+            LOG("Renderer error: Failed to create constant buffer for bloom pass");
+            return false;
+        }
+    }
+
+    // Create shader module (VS) for the shadow pass
+    // pixel shader will be null
+    ShaderId shadowpass_vs = shader::create_module_from_file(
+        &renderer->shader_system,
+        renderer->device.Get(),
+        L"src/shaders/shadowpass.vs.hlsl",
+        SHADER_STAGE_VS,
+        "main");
+
+    if (id::is_invalid(shadowpass_vs)) {
+        LOG("%s: Failed to create Shadow Pass vertex shader", __func__);
+        return false;
+    }
+
+    ShaderId shadowpass_modules[] = {shadowpass_vs};
+
+    D3D11_INPUT_ELEMENT_DESC shadowpass_input_desc[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+
+    // Create shader pipeline with vertex shader and no pixel
+    *out_pipeline = shader::create_pipeline(
+        &renderer->shader_system,
+        renderer->device.Get(),
+        shadowpass_modules,
+        ARRAYSIZE(shadowpass_modules),
+        shadowpass_input_desc,
+        ARRAYSIZE(shadowpass_input_desc));
+
+    if (id::is_invalid(*out_pipeline)) {
+        LOG("%s: Failed to create shader pipeline for Shadow Pass", __func__);
+        return false;
+    }
+
+    return true;
+}
+
+static void render_shadow_pass(Renderer *renderer, Scene *scene, Texture *shadow_atlas) {
+    BEGIN_D3D11_EVENT(renderer, L"Shadow Pass");
+
+    ID3D11DeviceContext *context = renderer->context.Get();
+
+    // Bind the states
+    context->OMSetDepthStencilState(renderer->depth_states[DEPTH_DEFAULT].Get(), 0);
+    context->RSSetState(renderer->rasterizer_states[RASTER_SOLID_BACKFACE].Get());
+    context->OMSetBlendState(renderer->blend_states[BLEND_DISABLE_WRITE].Get(), nullptr, 0xFFFFFFFF);
+
+    // Bind and clear the depth buffer (no color for this one)
+    renderer->context->OMSetRenderTargets(0, nullptr, shadow_atlas->dsv.Get());
+    renderer->context->ClearDepthStencilView(shadow_atlas->dsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+
+    // Bind the shader pipeline
+    ShaderPipeline *shadowpass_pipeline = shader::get_pipeline(&renderer->shader_system, renderer->shadowpass_shader);
+    shader::bind_pipeline(&renderer->shader_system, renderer->context.Get(), shadowpass_pipeline);
+
+    // Map the constant buffer
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    renderer->context->VSSetConstantBuffers(2, 1, renderer->shadowpass_cb_ptr.GetAddressOf());
+
+    // HACK: Hardcoding tile props
+    const uint32_t tile_width = 1024;
+    const uint32_t tile_height = 1024;
+    const uint32_t tiles_x = shadow_atlas->width / tile_width;
+    const uint32_t tiles_y = shadow_atlas->height / tile_height;
+    const uint32_t total_tiles = tiles_x * tiles_y;
+
+    // Loop through the scene lights and render
+    for (uint32_t i = 0; i < MAX_SCENE_LIGHTS; ++i) {
+        // If we have no more space on the shadow atlas, we break
+        if (i >= total_tiles) {
+            break;
+        }
+
+        // Grab the light instance
+        Id light_instance_id = scene->lights[i].id;
+        if (id::is_invalid(light_instance_id)) {
+            continue;
+        }
+
+        // FIXME: Not testing for whether this light should cast shadows or not
+
+        // Calculate the tiles
+        uint32_t tile_x = i % tiles_x;
+        uint32_t tile_y = i / tiles_x;
+
+        context->Map(renderer->shadowpass_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        CBShadowPass *constants = (CBShadowPass *)mapped.pData;
+        constants->view_projection_matrix = scene::light_get_view_projection_matrix(scene, light_instance_id);
+        context->Unmap(renderer->shadowpass_cb_ptr.Get(), 0);
+
+        // Set up the viewport for this light
+        D3D11_VIEWPORT vp = {};
+        vp.TopLeftX = tile_x * tile_width;
+        vp.TopLeftY = tile_y * tile_height;
+        vp.Width = static_cast<float>(tile_width);
+        vp.Height = static_cast<float>(tile_height);
+        vp.MinDepth = 0.0f;
+        vp.MaxDepth = 1.0f;
+        context->RSSetViewports(1, &vp);
+
+        // Render meshes
+        for (int i = 0; i < MAX_SCENE_MESHES; ++i) {
+            SceneMesh *mesh = &scene->meshes[i];
+            if (id::is_invalid(mesh->id))
+                continue;
+
+            // Lookup the mesh gpu resource through the mesh_id
+            Mesh *gpu_mesh = mesh::get(renderer, mesh->mesh_id);
+            if (!gpu_mesh) {
+                continue;
+            }
+
+            // Bind mesh instance
+            scene::bind_mesh_instance(renderer, scene, mesh->id, 1);
+
+            // Draw the mesh
+            mesh::draw(renderer->context.Get(), gpu_mesh);
+        }
+    }
+
+    END_D3D11_EVENT(renderer)
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "light.hpp"
 #include "material.hpp"
 #include "mesh.hpp"
 #include "scene.hpp"
@@ -16,6 +17,7 @@
 #define MAX_MESHES 32
 #define MAX_MATERIALS 32
 #define MAX_TEXTURES 64
+#define MAX_LIGHTS 32
 
 struct alignas(16) CBPerFrame {
     DirectX::XMFLOAT4X4 view_matrix;
@@ -75,10 +77,15 @@ struct alignas(16) CBGBufferPerObject {
     float padding[3];
 };
 
-struct alignas(16) CBLighting {
-    DirectX::XMFLOAT4X4 inv_view_projection;
-    DirectX::XMFLOAT3 camera_position;
-    float _padding0;
+struct alignas(16) CBShadowPass {
+    DirectX::XMFLOAT4X4 view_projection_matrix;
+};
+
+struct CBLight {
+    DirectX::XMFLOAT3 direction;
+    float intensity;
+    DirectX::XMFLOAT4X4 view_projection_matrix;
+    DirectX::XMFLOAT4 uv_rect;
 };
 
 enum RasterizerState {
@@ -147,6 +154,7 @@ struct Renderer {
     Mesh meshes[MAX_MESHES];
     Material materials[MAX_MATERIALS];
     Texture textures[MAX_TEXTURES];
+    Light lights[MAX_LIGHTS];
 
     /** @brief Pointer to the current window */
     Window *pWindow = NULL;
@@ -191,8 +199,8 @@ struct Renderer {
 
     // Lighting pass
     PipelineId lighting_pass_pipeline;
-    Microsoft::WRL::ComPtr<ID3D11Buffer> lp_cb_ptr;
-    TextureId lighting_rt;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> light_buffer;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> light_srv;
 
     // Depth prepass (Forward+)
     PipelineId zpass_pipeline;
@@ -207,14 +215,16 @@ struct Renderer {
     TextureId ping_pong_color1;
     PipelineId post_shader;
 
-    // TEMP:
-    Microsoft::WRL::ComPtr<ID3D11Buffer> debug_cb_ptr;
-
     // Pipeline States
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> rasterizer_states[RASTER_STATE_COUNT];
     Microsoft::WRL::ComPtr<ID3D11DepthStencilState> depth_states[DEPTH_STATE_COUNT];
     Microsoft::WRL::ComPtr<ID3D11BlendState> blend_states[BLEND_STATE_COUNT];
     Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_states[SAMPLER_STATE_COUNT];
+
+    // Shadow Pass
+    TextureId shadow_atlas;
+    PipelineId shadowpass_shader;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> shadowpass_cb_ptr;
 };
 
 namespace renderer {
@@ -238,7 +248,7 @@ void end_frame(Renderer *renderer);
 void render(Renderer *renderer, Scene *scene);
 
 void render_gbuffer(Renderer *renderer, Scene *scene, Texture *rt0, Texture *rt1, Texture *rt2, Texture *depth);
-void render_lighting_pass(Renderer *renderer, Texture *gbuffer_a, Texture *gbuffer_b, Texture *gbuffer_c, Texture *depth, Texture *irradiance_map, Texture *prefilter_map, Texture *brdf_lut, Texture *rt);
+void render_lighting_pass(Renderer *renderer, Scene *scene, Texture *gbuffer_a, Texture *gbuffer_b, Texture *gbuffer_c, Texture *depth, Texture *irradiance_map, Texture *prefilter_map, Texture *brdf_lut, Texture *shadow_atlas, ID3D11ShaderResourceView *lights, Texture *rt);
 void render_bloom_pass(Renderer *renderer, Texture *color_buffer, Texture **bloom_mips, uint32_t mip_count);
 void render_fxaa_pass(Renderer *renderer);
 void render_tonemap_pass(Renderer *renderer, Texture *scene_color, Texture *bloom_texture, Texture *out_rt);

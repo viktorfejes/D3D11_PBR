@@ -1,5 +1,7 @@
 #include "scene.hpp"
 
+#include "application.hpp"
+#include "light.hpp"
 #include "logger.hpp"
 #include "renderer.hpp"
 
@@ -16,6 +18,10 @@ bool scene::initialize(Scene *out_scene) {
 
     for (int i = 0; i < MAX_SCENE_MESHES; ++i) {
         out_scene->meshes[i].id = id::invalid();
+    }
+
+    for (int i = 0; i < MAX_SCENE_LIGHTS; ++i) {
+        out_scene->lights[i].id = id::invalid();
     }
 
     return true;
@@ -114,6 +120,40 @@ SceneId scene::add_camera(Scene *scene, float fov, float znear, float zfar, Dire
     cam->is_view_projection_dirty = true;
 
     return cam->id;
+}
+
+InstanceId scene::add_light(Scene *scene, Id light_id, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 target, bool cast_shadows) {
+    assert(scene && "scene::add_light: scene pointer cannot be NULL");
+
+    // Find an empty slot in scene with linear search
+    LightInstance *light = nullptr;
+    for (int i = 0; i < MAX_SCENE_LIGHTS; ++i) {
+        if (id::is_invalid(scene->lights[i].id)) {
+            light = &scene->lights[i];
+            light->id.id = i;
+            break;
+        }
+    }
+
+    // If we still don't have a SceneMesh pointer, then we are full
+    if (!light) {
+        LOG("scene::add_light: No more empty slots found");
+        return id::invalid();
+    }
+
+    // Set up the instance
+    light->light_id = light_id;
+    light->enabled = true;
+    light->position = position;
+    light->target = target;
+    light->shadowmap_index = 1;
+    light->cast_shadows = cast_shadows;
+
+    light->is_view_dirty = true;
+    light->is_projection_dirty = true;
+    light->is_view_projection_dirty = true;
+
+    return light->id;
 }
 
 void scene::bind_mesh_instance(Renderer *renderer, Scene *scene, Id mesh_instance_id, uint8_t start_slot) {
@@ -321,6 +361,152 @@ float scene::camera_get_distance(Scene *scene, Id scene_cam_id) {
         return cam->distance;
     }
     return 0.0f;
+}
+
+DirectX::XMFLOAT3 scene::light_get_direction(LightInstance *light) {
+    assert(light && "scene::light_get_direction: Light instance pointer cannot be NULL");
+    
+    DirectX::XMVECTOR direction = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&light->target), DirectX::XMLoadFloat3(&light->position)));
+    DirectX::XMFLOAT3 out_dir;
+    DirectX::XMStoreFloat3(&out_dir, direction);
+
+    return out_dir;
+}
+
+DirectX::XMFLOAT4X4 scene::light_get_view_matrix(Scene *scene, Id light_id) {
+    assert(scene && "scene::light_get_view_matrix: Scene pointer cannot be NULL");
+    assert(light_id.id < MAX_SCENE_LIGHTS && "scene::light_get_view_matrix: Incorrect Scene Light Id");
+
+    LightInstance *light_instance = &scene->lights[light_id.id];
+    if (!light_instance || id::is_stale(light_instance->id, light_id)) {
+        return DirectX::XMFLOAT4X4{
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1};
+    }
+
+    if (light_instance->is_view_dirty) {
+        DirectX::XMMATRIX view_matrix = DirectX::XMMatrixLookAtLH(
+            DirectX::XMLoadFloat3(&light_instance->position),
+            DirectX::XMLoadFloat3(&light_instance->target),
+            DirectX::XMVectorSet(0, 1, 0, 0));
+        DirectX::XMStoreFloat4x4(&light_instance->view_matrix, view_matrix);
+
+        light_instance->is_view_dirty = false;
+        light_instance->is_view_projection_dirty = true;
+    }
+
+    return light_instance->view_projection_matrix;
+}
+
+// TODO: One fetch, multiple use paradigm
+DirectX::XMFLOAT4X4 scene::light_get_projection_matrix(Scene *scene, Id light_id) {
+    assert(scene && "scene::light_get_projection_matrix: Scene pointer cannot be NULL");
+    assert(light_id.id < MAX_SCENE_LIGHTS && "scene::light_get_projection_matrix: Incorrect Scene Light Id");
+
+    LightInstance *light_instance = &scene->lights[light_id.id];
+    if (!light_instance || id::is_stale(light_instance->id, light_id)) {
+        return DirectX::XMFLOAT4X4{
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1};
+    }
+
+    if (light_instance->is_projection_dirty) {
+        Renderer *renderer = application::get_renderer();
+
+        // Fetch the light
+        Light *light = light::get(renderer, light_id);
+        if (!light) {
+            return DirectX::XMFLOAT4X4{
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1};
+        }
+
+        // Calculate light's view projection matrix based on type
+        DirectX::XMMATRIX projection_matrix;
+        switch (light->type) {
+            case LIGHT_TYPE_DIRECTIONAL:
+                projection_matrix = DirectX::XMMatrixOrthographicLH(
+                    500.0f, 500.0f,
+                    0.1f, 200.0f);
+                break;
+        }
+
+        DirectX::XMStoreFloat4x4(&light_instance->projection_matrix, projection_matrix);
+
+        light_instance->is_projection_dirty = false;
+        light_instance->is_view_projection_dirty = true;
+    }
+
+    return light_instance->projection_matrix;
+}
+
+DirectX::XMFLOAT4X4 scene::light_get_view_projection_matrix(Scene *scene, Id light_id) {
+    assert(scene && "scene::light_get_view_projection_matrix: Scene pointer cannot be NULL");
+    assert(light_id.id < MAX_SCENE_LIGHTS && "scene::light_get_view_projection_matrix: Incorrect Scene Light Id");
+
+    LightInstance *light_instance = &scene->lights[light_id.id];
+    if (!light_instance || id::is_stale(light_instance->id, light_id)) {
+        return DirectX::XMFLOAT4X4{
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1};
+    }
+
+    // If the light's view projection matrix needs to be recalculated
+    if (light_instance->is_view_dirty) {
+        DirectX::XMMATRIX view_matrix = DirectX::XMMatrixLookAtLH(
+            DirectX::XMLoadFloat3(&light_instance->position),
+            DirectX::XMLoadFloat3(&light_instance->target),
+            DirectX::XMVectorSet(0, 1, 0, 0));
+        DirectX::XMStoreFloat4x4(&light_instance->view_matrix, view_matrix);
+
+        light_instance->is_view_dirty = false;
+        light_instance->is_view_projection_dirty = true;
+    }
+
+    if (light_instance->is_projection_dirty) {
+        Renderer *renderer = application::get_renderer();
+
+        // Fetch the light
+        Light *light = light::get(renderer, light_id);
+        if (!light) {
+            return DirectX::XMFLOAT4X4{
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1};
+        }
+
+        // Calculate light's view projection matrix based on type
+        DirectX::XMMATRIX projection_matrix;
+        switch (light->type) {
+            case LIGHT_TYPE_DIRECTIONAL:
+                projection_matrix = DirectX::XMMatrixOrthographicLH(
+                    50.0f, 50.0f,
+                    0.1f, 200.0f);
+                break;
+        }
+
+        DirectX::XMStoreFloat4x4(&light_instance->projection_matrix, projection_matrix);
+
+        light_instance->is_projection_dirty = false;
+        light_instance->is_view_projection_dirty = true;
+    }
+
+    if (light_instance->is_view_projection_dirty) {
+        DirectX::XMMATRIX vp_matrix = DirectX::XMLoadFloat4x4(&light_instance->view_matrix) * DirectX::XMLoadFloat4x4(&light_instance->projection_matrix);
+        DirectX::XMStoreFloat4x4(&light_instance->view_projection_matrix, vp_matrix);
+        light_instance->is_view_projection_dirty = false;
+    }
+
+    return light_instance->view_projection_matrix;
 }
 
 void scene::mesh_set_position(Scene *scene, Id scene_mesh_id, DirectX::XMFLOAT3 position) {

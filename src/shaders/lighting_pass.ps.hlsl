@@ -11,6 +11,18 @@ TextureCube irradiance_tex : register(t4);
 TextureCube prefilter_map : register(t5);
 Texture2D brdf_lut : register(t6);
 
+// Shadow Atlas
+Texture2D shadow_atlas : register(t7);
+
+// Lights array
+struct Light {
+    float3 direction;
+    float intensity;
+    row_major float4x4 light_vp_matrix;
+    float4 uv_rect;
+};
+StructuredBuffer<Light> lights : register(t8);
+
 // Sampler for textures
 SamplerState samp : register(s0);
 
@@ -28,9 +40,58 @@ struct PSInput {
     float2 uv : TEXCOORD0;
 };
 
+#define PI 3.14159265359
+#define INV_PI (1 / PI)
+
+float D_GGX(float NdotH, float roughness) {
+    float a2 = roughness * roughness * roughness * roughness;
+    float f = (NdotH * a2 - NdotH) * NdotH + 1.0;
+    return a2 / (PI * f * f);
+}
+
+float3 F_Schlick(float cosTheta, float3 F0, float3 F90) {
+    float f = saturate(1.0 - cosTheta);
+    float f2 = f * f;
+    float fresnel = f2 * f2 * f; // pow(1.0f - cosTheta, 5.0f) for ~2 less instructions
+    return F0 + (F90 - F0) * fresnel;
+}
+
+// This already contains the G / (4 N·V N·L) term
+float G_smith_ggx_correlated(float NdotV, float NdotL, float roughness) {
+    float a2 = roughness * roughness * roughness * roughness;
+    float GGXL = NdotV * sqrt((-NdotL * a2 + NdotL) * NdotL + a2);
+    float GGXV = NdotL * sqrt((-NdotV * a2 + NdotV) * NdotV + a2);
+    return 0.5 / (GGXV + GGXL);
+}
+
+float Fd_Lambert() {
+    return INV_PI;
+}
+
+float compute_shadow(Texture2D shadow_atlas, SamplerState samp, float4 lightspace_pos) {
+    float3 ndc = lightspace_pos.xyz / lightspace_pos.w;
+    float2 uv = ndc.xy * 0.5f + 0.5f;
+    float depth = ndc.z * 0.5f + 0.5f;
+
+    float shadow = 0.0;
+    float texel_size = 1.0 / 1024;
+
+    [unroll]
+    for (int y = -1; y <= 1; ++y) {
+        [unroll]
+        for (int x = -1; x <= 1; ++x) {
+            float2 offset = float2(x, y) * texel_size;
+            float sample = shadow_atlas.Sample(samp, uv + offset).r;
+            shadow += (depth - 0.001 < sample) ? 1.0 : 0.0;
+        }
+    }
+
+    return shadow / 9.0;
+}
+
 float4 main(PSInput input) : SV_TARGET {
     // Some hardcoded value for now for coat
-    float clear_coat = 1.0;
+    float clear_coat = 0.0;
     float cc_roughness = 0.03;
     /*------------------------------------------------------*/
     float2 uv = input.uv;
@@ -69,11 +130,40 @@ float4 main(PSInput input) : SV_TARGET {
     float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo, metallic);
 
     // IBL Exposure EV
-    float ibl_exposure_ev = -1.0f;
+    float ibl_exposure_ev = -10.0f;
 
     // =======================================================
     // DIRECT LIGHTING
     // =======================================================
+    float3 direct_lighting = float3(0, 0, 0);
+    // HACK: Hardcoded max lights...
+    for (int i = 0; i < 1; ++i) {
+        Light light = lights[i];
+
+        float3 L = normalize(-light.direction);
+        float3 H = normalize(V + L);
+
+        float NdotL = saturate(dot(normal, L));
+        float NdotH = saturate(dot(normal, H));
+        float LdotH = saturate(dot(L, H));
+
+        // Evaluate BRDF
+        float D = D_GGX(NdotH, roughness);
+        float3 F = F_Schlick(LdotH, F0, float3(1.0, 1.0, 1.0));
+        float G = G_smith_ggx_correlated(NdotV, NdotL, roughness);
+        float3 Fr = (D * G) * F;
+        float3 Fd = albedo * Fd_Lambert();
+        float3 BRDF = (1.0 - metallic) * Fd + Fr;
+
+        // TODO: Add Clear Coat here as well
+
+        // TODO: Shadow computation
+        float4 lightspace_pos = mul(float4(world_position, 1.0), light.light_vp_matrix);
+        float shadow = compute_shadow(shadow_atlas, samp, lightspace_pos);
+
+        // HACK: Hardcoded color (the one after BRDF)
+        direct_lighting += BRDF * float3(1.0, 0.0, 0.0) * light.intensity * NdotL * shadow;
+    }
 
     // =======================================================
     // INDIRECT LIGHTING
@@ -107,12 +197,13 @@ float4 main(PSInput input) : SV_TARGET {
     diffuse_ibl *= (1.0 - Fc);
     specular_ibl *= (1.0 - Fc);
     /*------------------------------------------------------*/
-    
+
     float3 indirect_lighting = exp2(ibl_exposure_ev) * (diffuse_ibl + specular_ibl + specular_coat);
 
-    float3 Lo = emission + indirect_lighting;
+    float3 Lo = emission + direct_lighting + indirect_lighting;
 
     return float4(Lo, 1.0f);
 }
+
 
 

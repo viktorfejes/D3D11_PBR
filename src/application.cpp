@@ -3,6 +3,7 @@
 #include "id.hpp"
 #include "idmap.hpp"
 #include "input.hpp"
+#include "light.hpp"
 #include "logger.hpp"
 #include "material.hpp"
 #include "mesh.hpp"
@@ -52,6 +53,10 @@ bool application::initialize(ApplicationConfig config) {
     }
 
     deserialize_config();
+
+    // HACK: Adding a directional light here to test
+    LightId dir_light = light::create(LIGHT_TYPE_DIRECTIONAL, DirectX::XMFLOAT3(1, 1, 1), 1.0);
+    scene::add_light(&pState->scenes[0], dir_light, DirectX::XMFLOAT3(55, 100, 0), DirectX::XMFLOAT3(0, 0, 0), true);
 
     return true;
 }

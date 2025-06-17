@@ -52,11 +52,19 @@ struct LightInstance {
     InstanceId id;
     Id light_id;
 
-    DirectX::XMFLOAT4X4 view_projection_matrix;
-    DirectX::XMFLOAT3 position;
-    DirectX::XMFLOAT3 rotation;
-    uint32_t shadowmap_index;
     bool enabled;
+    DirectX::XMFLOAT3 position;
+    DirectX::XMFLOAT3 target;
+
+    DirectX::XMFLOAT4X4 view_matrix;
+    DirectX::XMFLOAT4X4 projection_matrix;
+    DirectX::XMFLOAT4X4 view_projection_matrix;
+    bool is_view_dirty;
+    bool is_projection_dirty;
+    bool is_view_projection_dirty;
+
+    uint32_t shadowmap_index;
+    bool cast_shadows;
 };
 
 struct Scene {
@@ -76,7 +84,7 @@ namespace scene {
 bool initialize(Scene *out_scene);
 SceneId add_mesh(Scene *scene, Id mesh_id, Id material_id, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 rotation, DirectX::XMFLOAT3 scale);
 SceneId add_camera(Scene *scene, float fov, float znear, float zfar, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 target);
-InstanceId add_light(Scene *scene, Id light_id);
+InstanceId add_light(Scene *scene, Id light_id, DirectX::XMFLOAT3 position, DirectX::XMFLOAT3 target, bool cast_shadows);
 
 void bind_mesh_instance(Renderer *renderer, Scene *scene, SceneId mesh_instance_id, uint8_t start_slot);
 DirectX::XMFLOAT3 mesh_get_rotation(Scene *scene, SceneId scene_mesh_id);
@@ -91,6 +99,11 @@ float camera_get_pitch(Scene *scene, Id scene_cam_id);
 float camera_get_distance(Scene *scene, Id scene_cam_id);
 DirectX::XMFLOAT3 camera_get_position(Scene *scene, Id scene_cam_id);
 DirectX::XMFLOAT3 camera_get_target(Scene *scene, Id scene_cam_id);
+
+DirectX::XMFLOAT3 light_get_direction(LightInstance *light);
+DirectX::XMFLOAT4X4 light_get_view_matrix(Scene *scene, Id light_id);
+DirectX::XMFLOAT4X4 light_get_projection_matrix(Scene *scene, Id light_id);
+DirectX::XMFLOAT4X4 light_get_view_projection_matrix(Scene *scene, Id light_id);
 
 void mesh_set_position(Scene *scene, Id scene_mesh_id, DirectX::XMFLOAT3 position);
 void mesh_set_rotation(Scene *scene, Id scene_mesh_id, DirectX::XMFLOAT3 rotation);
