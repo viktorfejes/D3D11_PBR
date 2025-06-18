@@ -265,7 +265,7 @@ void bind_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11D
 void clear_render_target(Renderer *renderer, ID3D11RenderTargetView *rtv, ID3D11DepthStencilView *dsv, float *clear_color);
 
 bool convert_equirectangular_to_cubemap(Renderer *renderer);
-bool generate_irradiance_cubemap(Renderer *renderer);
+bool generate_irradiance_cubemap(Renderer *renderer, uint16_t resolution);
 bool generate_IBL_prefilter(Renderer *renderer, uint32_t total_mips);
 bool generate_BRDF_LUT(Renderer *renderer);
 

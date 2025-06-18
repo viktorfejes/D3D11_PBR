@@ -285,7 +285,7 @@ bool renderer::initialize(Renderer *renderer, Window *pWindow) {
     // Convert 360 HDRi to Cubemap
     convert_equirectangular_to_cubemap(renderer);
     // Generate Irradiance map from the cubemap
-    generate_irradiance_cubemap(renderer);
+    generate_irradiance_cubemap(renderer, 32);
     // Create the IBL Prefilter map for Specular
     generate_IBL_prefilter(renderer, 5);
     // Generate the BRDF LUT
@@ -1537,21 +1537,22 @@ bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
         renderer->context->Draw(3, 0);
     }
 
+    renderer->context->OMSetRenderTargets(0, nullptr, nullptr);
+
     END_D3D11_EVENT(renderer);
     return true;
 }
 
-bool renderer::generate_irradiance_cubemap(Renderer *renderer) {
+bool renderer::generate_irradiance_cubemap(Renderer *renderer, uint16_t resolution) {
     BEGIN_D3D11_EVENT(renderer, L"Irradiance Map from Cubemap");
 
-    // TODO: Currently this is hardcoded here and in the shader
-    const uint16_t irradiance_size = 32;
+    ID3D11DeviceContext *context = renderer->context.Get();
 
     renderer->irradiance_cubemap = texture::create(
-        irradiance_size,
-        irradiance_size,
+        resolution,
+        resolution,
         DXGI_FORMAT_R16G16B16A16_FLOAT,
-        D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+        D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
         true,
         nullptr,
         0,
@@ -1560,19 +1561,19 @@ bool renderer::generate_irradiance_cubemap(Renderer *renderer) {
         1, true);
     Texture *irradiance_tex = &renderer->textures[renderer->irradiance_cubemap.id];
 
-    ShaderId irradiance_ps = shader::create_module_from_file(
+    ShaderId irradiance_cs = shader::create_module_from_file(
         &renderer->shader_system,
         renderer->device.Get(),
-        L"src/shaders/irradiance_conv.ps.hlsl",
-        SHADER_STAGE_PS,
+        L"src/shaders/cubemap_to_irradiance.cs.hlsl",
+        SHADER_STAGE_CS,
         "main");
 
-    if (id::is_invalid(irradiance_ps)) {
-        LOG("%s: Couldn't create pixel shader module for Irradiance Convolution", __func__);
+    if (id::is_invalid(irradiance_cs)) {
+        LOG("%s: Couldn't create compute shader module for Irradiance Convolution", __func__);
         return false;
     }
 
-    ShaderId irradiance_modules[] = {renderer->fullscreen_triangle_vs, irradiance_ps};
+    ShaderId irradiance_modules[] = {irradiance_cs};
     PipelineId irradiance_shader = shader::create_pipeline(
         &renderer->shader_system,
         renderer->device.Get(),
@@ -1585,40 +1586,55 @@ bool renderer::generate_irradiance_cubemap(Renderer *renderer) {
         return false;
     }
 
+    // Create constant buffer
+    struct CBIrradiance {
+        uint32_t resolution;
+        float padding[3];
+    };
+
+    Microsoft::WRL::ComPtr<ID3D11Buffer> irradiance_buffer;
+    D3D11_BUFFER_DESC prefilter_cb_desc = {};
+    prefilter_cb_desc.ByteWidth = sizeof(CBIrradiance);
+    prefilter_cb_desc.Usage = D3D11_USAGE_DYNAMIC;
+    prefilter_cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    prefilter_cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    HRESULT hr = renderer->device->CreateBuffer(&prefilter_cb_desc, nullptr, irradiance_buffer.GetAddressOf());
+    if (FAILED(hr)) {
+        LOG("%s: Failed to create constant buffer for IBL prefilter", __func__);
+        return false;
+    }
+
     // Bind shaders
     ShaderPipeline *irradiance_pipeline = shader::get_pipeline(&renderer->shader_system, irradiance_shader);
-    shader::bind_pipeline(&renderer->shader_system, renderer->context.Get(), irradiance_pipeline);
+    shader::bind_pipeline(&renderer->shader_system, context, irradiance_pipeline);
 
-    // const float clear_color[4] = {0, 0, 0, 1};
-    // renderer->context->PSSetSamplers(0, 1, renderer->sampler.GetAddressOf());
+    // Bind the sampler state
+    context->CSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
 
-    Texture *env_map = &renderer->textures[renderer->cubemap_id.id];
+    // Fetch and bind the cubemap
+    Texture *cubemap = &renderer->textures[renderer->cubemap_id.id];
+    context->CSSetShaderResources(0, 1, cubemap->srv.GetAddressOf());
 
-    D3D11_VIEWPORT viewport = {};
-    viewport.Width = (float)irradiance_size;
-    viewport.Height = (float)irradiance_size;
-    viewport.MaxDepth = 1.0f;
-    renderer->context->RSSetViewports(1, &viewport);
+    // Update constant buffer with resolution
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    context->Map(irradiance_buffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+    ((CBIrradiance *)mapped.pData)->resolution = resolution;
+    context->Unmap(irradiance_buffer.Get(), 0);
+    context->CSSetConstantBuffers(0, 1, irradiance_buffer.GetAddressOf());
 
-    for (int face = 0; face < 6; ++face) {
-        // Update constant buffer with face index
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        renderer->context->Map(renderer->face_cb_ptr.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
-        ((CBEquirectToCube *)mapped.pData)->face_index = face;
-        renderer->context->Unmap(renderer->face_cb_ptr.Get(), 0);
+    // Bind the output texture
+    context->CSSetUnorderedAccessViews(0, 1, irradiance_tex->uav[0].GetAddressOf(), nullptr);
 
-        // Set the face index cb on ps shader
-        renderer->context->PSSetConstantBuffers(0, 1, renderer->face_cb_ptr.GetAddressOf());
+    context->Dispatch(
+        (resolution + 7) / 8,
+        (resolution + 7) / 8,
+        6);
 
-        // Set target
-        renderer->context->OMSetRenderTargets(1, irradiance_tex->rtv[face].GetAddressOf(), nullptr);
-
-        // Bind environment map SRV
-        renderer->context->PSSetShaderResources(0, 1, env_map->srv.GetAddressOf());
-
-        // Draw
-        renderer->context->Draw(3, 0);
-    }
+    ID3D11ShaderResourceView *nullSRV = nullptr;
+    ID3D11UnorderedAccessView *nullUAV = nullptr;
+    context->CSSetShaderResources(0, 1, &nullSRV);
+    context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 
     END_D3D11_EVENT(renderer);
     return true;

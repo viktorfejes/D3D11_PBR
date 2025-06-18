@@ -68,24 +68,43 @@ float Fd_Lambert() {
     return INV_PI;
 }
 
-float compute_shadow(Texture2D shadow_atlas, SamplerState samp, float4 lightspace_pos) {
+float compute_shadow(Texture2D shadow_atlas, SamplerState samp, float4 lightspace_pos, float4 uv_rect) {
+    // Perspective divide
     float3 ndc = lightspace_pos.xyz / lightspace_pos.w;
-    float2 uv = ndc.xy * 0.5f + 0.5f;
-    float depth = ndc.z * 0.5f + 0.5f;
-
+    
+    // Check if fragment is outside light frustum
+    if (ndc.x < -1.0 || ndc.x > 1.0 || ndc.y < -1.0 || ndc.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+        return 0.0; // No shadow (fully lit) if outside frustum
+    }
+    
+    // Convert to [0,1] range
+    float2 shadow_uv = ndc.xy * 0.5f + 0.5f;
+    // Flip Y coordinate for Direct3D
+    shadow_uv.y = 1.0f - shadow_uv.y;
+    
+    // Map to the specific light's region in the shadow atlas
+    shadow_uv = shadow_uv * uv_rect.zw + uv_rect.xy;
+    
+    // Current fragment depth
+    float current_depth = ndc.z;
+    
+    // PCF (Percentage Closer Filtering) with bias
     float shadow = 0.0;
-    float texel_size = 1.0 / 1024;
-
+    float bias = 0.0005; // Adjust based on your scene scale
+    float texel_size = 1.0 / 1024.0; // Should match your shadow atlas resolution
+    
     [unroll]
     for (int y = -1; y <= 1; ++y) {
         [unroll]
         for (int x = -1; x <= 1; ++x) {
             float2 offset = float2(x, y) * texel_size;
-            float sample = shadow_atlas.Sample(samp, uv + offset).r;
-            shadow += (depth < sample - 0.001) ? 1.0 : 0.0;
+            float shadow_depth = shadow_atlas.Sample(samp, shadow_uv + offset).r;
+            
+            // Compare depths with bias
+            shadow += (current_depth - bias > shadow_depth) ? 0.0 : 1.0;
         }
     }
-
+    
     return shadow / 9.0;
 }
 
@@ -137,7 +156,7 @@ float4 main(PSInput input) : SV_TARGET {
     // =======================================================
     float3 direct_lighting = float3(0, 0, 0);
     // HACK: Hardcoded max lights...
-    for (int i = 0; i < 1; ++i) {
+for (int i = 0; i < 1; ++i) {
         Light light = lights[i];
 
         float3 L = normalize(-light.direction);
@@ -155,14 +174,14 @@ float4 main(PSInput input) : SV_TARGET {
         float3 Fd = albedo * Fd_Lambert();
         float3 BRDF = (1.0 - metallic) * Fd + Fr;
 
-        // TODO: Add Clear Coat here as well
-
-        // TODO: Shadow computation
+        // Shadow computation with atlas UV mapping
         float4 lightspace_pos = mul(float4(world_position, 1.0), light.light_vp_matrix);
-        float shadow = compute_shadow(shadow_atlas, samp, lightspace_pos);
+        float shadow = compute_shadow(shadow_atlas, samp, lightspace_pos, light.uv_rect);
 
-        // HACK: Hardcoded color (the one after BRDF)
-        direct_lighting += BRDF * float3(1.0, 1.0, 1.0) * light.intensity * NdotL;
+        // Apply lighting only if fragment is facing the light
+        if (NdotL > 0.0) {
+            direct_lighting += BRDF * float3(1.0, 1.0, 1.0) * light.intensity * NdotL * shadow;
+        }
     }
 
     // =======================================================

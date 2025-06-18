@@ -197,6 +197,73 @@ MeshId mesh::load(const char *filename) {
     return m->id;
 }
 
+MeshId mesh::load_from_data(Vertex *vertices, uint32_t vertex_count, uint32_t *indices, uint32_t index_count) {
+    Renderer *renderer = application::get_renderer();
+
+    // Get the device through the application from the renderer
+    // This way it doesn't need to be passed in and for these
+    // loaders it's more ergonomic not to have to do that IMHO.
+    ID3D11Device *device = renderer->device.Get();
+
+    // Check if we can find an empty slot for our mesh
+    // by linear search (which for this size is probably the best)
+    Mesh *m = nullptr;
+    Mesh *meshes = renderer->meshes;
+    for (uint8_t i = 0; i < MAX_MESHES; ++i) {
+        if (id::is_invalid(meshes[i].id)) {
+            m = &meshes[i];
+            m->id.id = i;
+            break;
+        }
+    }
+
+    if (m == nullptr) {
+        LOG("mesh::load: Max meshes reached, adjust max mesh count.");
+        return id::invalid();
+    }
+
+    // Create Vertex Buffer
+    {
+        D3D11_BUFFER_DESC desc = {};
+        desc.ByteWidth = UINT(sizeof(*vertices) * vertex_count);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        desc.CPUAccessFlags = 0;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = vertices;
+
+        HRESULT hr = device->CreateBuffer(&desc, &initData, m->pVertexBuffer.GetAddressOf());
+        if (FAILED(hr)) {
+            LOG("%s: Vertex buffer couldn't be created.", __func__);
+            return id::invalid();
+        }
+    }
+
+    // Create index buffer
+    {
+        D3D11_BUFFER_DESC desc = {};
+        desc.ByteWidth = UINT(sizeof(*indices) * index_count);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+        desc.CPUAccessFlags = 0;
+
+        D3D11_SUBRESOURCE_DATA init_data = {};
+        init_data.pSysMem = indices;
+
+        HRESULT hr = device->CreateBuffer(&desc, &init_data, m->pIndexBuffer.GetAddressOf());
+        if (FAILED(hr)) {
+            LOG("%s: Index buffer couldn't be created.", __func__);
+            return id::invalid();
+        }
+    }
+
+    m->vertexStride = sizeof(*vertices);
+    m->indexCount = index_count;
+
+    return m->id;
+}
+
 // Id mesh::load_obj(const char *filename) {
 //     // Load in the specified OBJ file using tinyobj
 //     // This is much easier for now than writing my own
@@ -381,6 +448,7 @@ void mesh::draw(ID3D11DeviceContext *context, Mesh *mesh) {
         0);
 
     // Set the primitive topology
+    // TODO: Do I need this here if I set this in my passes?
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Draw

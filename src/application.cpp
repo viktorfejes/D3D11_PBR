@@ -58,6 +58,20 @@ bool application::initialize(ApplicationConfig config) {
     LightId dir_light = light::create(LIGHT_TYPE_DIRECTIONAL, DirectX::XMFLOAT3(1, 1, 1), 1.0);
     scene::add_light(&pState->scenes[0], dir_light, DirectX::XMFLOAT3(55, 100, 0), DirectX::XMFLOAT3(0, 0, 0), true);
 
+    // TEMP: Adding a simple plane for some testing purposes
+    {
+        Vertex vertices[] = {
+            {DirectX::XMFLOAT3(-0.5f, 0.0f, 0.5f), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f), DirectX::XMFLOAT2(0.0f, 0.0f), DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+            {DirectX::XMFLOAT3(0.5f, 0.0f, 0.5f), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f), DirectX::XMFLOAT2(1.0f, 0.0f), DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+            {DirectX::XMFLOAT3(0.5f, 0.0f, -0.5f), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f), DirectX::XMFLOAT2(1.0f, 1.0f), DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+            {DirectX::XMFLOAT3(-0.5f, 0.0f, -0.5f), DirectX::XMFLOAT3(0.0f, 1.0f, 0.0f), DirectX::XMFLOAT2(0.0f, 1.0f), DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f)},
+        };
+        uint32_t indices[] = {0, 1, 2, 0, 2, 3};
+        MeshId plane_mesh = mesh::load_from_data(vertices, ARRAYSIZE(vertices), indices, ARRAYSIZE(indices));
+        MaterialId default_mat = material::create(DirectX::XMFLOAT3(0.18, 0.18, 0.18), id::invalid(), 0.0, id::invalid(), 0.8f, id::invalid(), id::invalid(), 0.0f, id::invalid());
+        scene::add_mesh(&pState->scenes[0], plane_mesh, default_mat, DirectX::XMFLOAT3(0.0f, -5.8f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f), DirectX::XMFLOAT3(100.0f, 100.0f, 100.0f));
+    }
+
     return true;
 }
 
