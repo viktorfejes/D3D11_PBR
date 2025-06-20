@@ -12,14 +12,14 @@
                 {
                     "mesh_id": 1,
                     "material_id": 1,
-                    "position": [0.0, 0.0, 0.0],
+                    "position": [20.0, 20.0, 20.0],
                     "rotation": [0.0, 0.0, 0.0],
                     "scale": [0.1, 0.1, 0.1]
                 },
                 {
                     "mesh_id": 2,
                     "material_id": 2,
-                    "position": [0.0, 20.0, 0.0],
+                    "position": [0.0, 0.0, 0.0],
                     "rotation": [0.0, 0.0, 0.0],
                     "scale": [1.0, 1.0, 1.0]
                 }
@@ -104,28 +104,33 @@
         },
         {
             "id": 10,
-            "path": "assets/ferrari/ferrari_hi_Body_BaseColor_sRGB.png",
+            "path": "assets/ferrari/ferrari_min_removed_materials_DefaultMaterial_BaseColor_silver_sRGB.1001.png",
             "srgb": true
         },
         {
             "id": 11,
-            "path": "assets/ferrari/ferrari_hi_Body_Roughness_Raw.png",
+            "path": "assets/ferrari/ferrari_min_removed_materials_DefaultMaterial_Roughness_Raw.1001.png",
             "srgb": false
         },
         {
             "id": 12,
-            "path": "assets/ferrari/ferrari_hi_Body_Normal_Raw.png",
+            "path": "assets/ferrari/ferrari_min_removed_materials_DefaultMaterial_Normal_Raw.1001.png",
             "srgb": false
         },
         {
             "id": 13,
-            "path": "assets/ferrari/ferrari_hi_Body_Metallic_Raw.png",
+            "path": "assets/ferrari/ferrari_min_removed_materials_DefaultMaterial_Metallic_Raw.1001.png",
             "srgb": false
         },
         {
             "id": 14,
-            "path": "assets/ferrari/ferrari_hi_Body_Emissive_sRGB.png",
+            "path": "assets/ferrari/ferrari_min_removed_materials_DefaultMaterial_Emissive_sRGB.1001.png",
             "srgb": true 
+        },
+        {
+            "id": 15,
+            "path": "assets/ferrari/ferrari_min_removed_materials_DefaultMaterial_Coat_Raw.1001.png",
+            "srgb": false 
         }
     ],
     "materials": [
@@ -135,6 +140,8 @@
             "albedo_map": 0,
             "roughness": 1.0,
             "roughness_map": 1,
+            "coat": 0.0,
+            "coat_map": -1,
             "metallic": 1.0,
             "metallic_map": 3,
             "normal_map": 2,
@@ -147,6 +154,8 @@
             "albedo_map": 5,
             "roughness": 1.0,
             "roughness_map": 6,
+            "coat": 0.0,
+            "coat_map": -1,
             "metallic": 1.0,
             "metallic_map": 8,
             "normal_map": 7,
@@ -159,6 +168,8 @@
             "albedo_map": 10,
             "roughness": 1.5,
             "roughness_map": 11,
+            "coat": 1.0,
+            "coat_map": 15,
             "metallic": 1.0,
             "metallic_map": 13,
             "normal_map": 12,

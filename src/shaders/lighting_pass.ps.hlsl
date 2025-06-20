@@ -71,47 +71,47 @@ float Fd_Lambert() {
 float compute_shadow(Texture2D shadow_atlas, SamplerState samp, float4 lightspace_pos, float4 uv_rect) {
     // Perspective divide
     float3 ndc = lightspace_pos.xyz / lightspace_pos.w;
-    
+
     // Check if fragment is outside light frustum
     if (ndc.x < -1.0 || ndc.x > 1.0 || ndc.y < -1.0 || ndc.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
         return 0.0; // No shadow (fully lit) if outside frustum
     }
-    
+
     // Convert to [0,1] range
     float2 shadow_uv = ndc.xy * 0.5f + 0.5f;
     // Flip Y coordinate for Direct3D
     shadow_uv.y = 1.0f - shadow_uv.y;
-    
+
     // Map to the specific light's region in the shadow atlas
     shadow_uv = shadow_uv * uv_rect.zw + uv_rect.xy;
-    
+
     // Current fragment depth
     float current_depth = ndc.z;
-    
+
     // PCF (Percentage Closer Filtering) with bias
     float shadow = 0.0;
-    float bias = 0.0005; // Adjust based on your scene scale
+    float bias = 0.0005;             // Adjust based on your scene scale
     float texel_size = 1.0 / 1024.0; // Should match your shadow atlas resolution
-    
+
     [unroll]
     for (int y = -1; y <= 1; ++y) {
         [unroll]
         for (int x = -1; x <= 1; ++x) {
             float2 offset = float2(x, y) * texel_size;
             float shadow_depth = shadow_atlas.Sample(samp, shadow_uv + offset).r;
-            
+
             // Compare depths with bias
             shadow += (current_depth - bias > shadow_depth) ? 0.0 : 1.0;
         }
     }
-    
+
     return shadow / 9.0;
 }
 
 float4 main(PSInput input) : SV_TARGET {
     // Some hardcoded value for now for coat
-    float clear_coat = 0.0;
-    float cc_roughness = 0.03;
+    // float clear_coat = 0.0;
+    float cc_roughness = 0.04;
     /*------------------------------------------------------*/
     float2 uv = input.uv;
 
@@ -137,6 +137,7 @@ float4 main(PSInput input) : SV_TARGET {
     float3 emission = emission_metallic.Sample(samp, uv).rgb;
     float metallic = emission_metallic.Sample(samp, uv).a;
     float roughness = max(albedo_roughness.Sample(samp, uv).a, 0.04);
+    float coat = world_normal.Sample(samp, uv).a;
 
     // View Vector
     float3 V = normalize(camera_position - world_position);
@@ -156,7 +157,7 @@ float4 main(PSInput input) : SV_TARGET {
     // =======================================================
     float3 direct_lighting = float3(0, 0, 0);
     // HACK: Hardcoded max lights...
-for (int i = 0; i < 1; ++i) {
+    for (int i = 0; i < 1; ++i) {
         Light light = lights[i];
 
         float3 L = normalize(-light.direction);
@@ -210,7 +211,7 @@ for (int i = 0; i < 1; ++i) {
     // Hopefully, coat?
     float mip_level_cc = cc_roughness * max_reflection_LOD;
     float3 prefiltered_cc = prefilter_map.SampleLevel(samp, float3(-R.x, R.y, R.z), mip_level_cc).rgb;
-    float Fc = clear_coat * (0.04 + (1.0 - 0.04) * pow(1.0 - NdotV, 5.0));
+    float Fc = coat * (0.04 + (1.0 - 0.04) * pow(1.0 - NdotV, 5.0));
     float3 specular_coat = prefiltered_cc * Fc;
     // Account for coat?
     diffuse_ibl *= (1.0 - Fc);
@@ -221,7 +222,15 @@ for (int i = 0; i < 1; ++i) {
 
     float3 Lo = emission + direct_lighting + indirect_lighting;
 
-    return float4(Lo, 1.0f);
+    // Temporary distance fog
+    float dist_to_cam = length(world_position - camera_position);
+    float fog_start = 15.0;
+    float density = 0.3;
+    float3 fog_color = float3(0.0, 0.0, 0.0);
+    float fog_amount = 1.0f - exp(-(max(0.0, dist_to_cam - fog_start)) * density);
+    /*------------------------------------------------------*/
+
+    return float4(lerp(Lo, fog_color, fog_amount), 1.0f);
 }
 
 

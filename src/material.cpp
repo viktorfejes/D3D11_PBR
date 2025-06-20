@@ -8,7 +8,7 @@
 #include "texture.hpp"
 #include <cassert>
 
-MaterialId material::create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, float metallic_value, Id metallic_texture, float roughness_value, Id roughness_texture, Id normal_texture, float emission_intensity, Id emission_texture) {
+MaterialId material::create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, float metallic_value, Id metallic_texture, float roughness_value, Id roughness_texture, float coat_value, Id coat_texture, Id normal_texture, float emission_intensity, Id emission_texture) {
     // Materials are kept in the renderer so fetching that here
     Renderer *renderer = application::get_renderer();
 
@@ -33,12 +33,14 @@ MaterialId material::create(DirectX::XMFLOAT3 albedo_color, Id albedo_texture, f
     mat->albedo_color = albedo_color;
     mat->metallic_value = metallic_value;
     mat->roughness_value = roughness_value;
+    mat->coat_value = coat_value;
     mat->emission_intensity = emission_intensity;
 
     // Material textures
     mat->albedo_texture = id::is_invalid(albedo_texture) ? renderer->amre_fallback_texture : albedo_texture;
     mat->metallic_texture = id::is_invalid(metallic_texture) ? renderer->amre_fallback_texture : metallic_texture;
     mat->roughness_texture = id::is_invalid(roughness_texture) ? renderer->amre_fallback_texture : roughness_texture;
+    mat->coat_texture = id::is_invalid(coat_texture) ? renderer->amre_fallback_texture : coat_texture;
     mat->normal_texture = id::is_invalid(normal_texture) ? renderer->normal_fallback_texture : normal_texture;
     mat->emission_texture = id::is_invalid(emission_texture) ? renderer->amre_fallback_texture : emission_texture;
 
@@ -69,6 +71,7 @@ void material::bind(Renderer *renderer, Material *material, uint8_t start_cb, ui
     cb_ptr->emission_intensity = material->emission_intensity;
     cb_ptr->metallic_value = material->metallic_value;
     cb_ptr->roughness_value = material->roughness_value;
+    cb_ptr->coat_value = material->coat_value;
 
     renderer->context->Unmap(renderer->pCBPerMaterial.Get(), 0);
     renderer->context->PSSetConstantBuffers((UINT)start_cb, 1, renderer->pCBPerMaterial.GetAddressOf());
@@ -77,6 +80,7 @@ void material::bind(Renderer *renderer, Material *material, uint8_t start_cb, ui
     Texture *albedo_tex = texture::get(renderer, material->albedo_texture);
     Texture *metallic_tex = texture::get(renderer, material->metallic_texture);
     Texture *roughness_tex = texture::get(renderer, material->roughness_texture);
+    Texture *coat_tex = texture::get(renderer, material->coat_texture);
     Texture *normal_tex = texture::get(renderer, material->normal_texture);
     Texture *emission_tex = texture::get(renderer, material->emission_texture);
 
@@ -84,6 +88,7 @@ void material::bind(Renderer *renderer, Material *material, uint8_t start_cb, ui
         albedo_tex->srv.Get(),
         metallic_tex->srv.Get(),
         roughness_tex->srv.Get(),
+        coat_tex->srv.Get(),
         normal_tex->srv.Get(),
         emission_tex->srv.Get(),
     };

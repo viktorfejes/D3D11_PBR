@@ -1454,8 +1454,8 @@ bool renderer::convert_equirectangular_to_cubemap(Renderer *renderer) {
     renderer->context->PSSetSamplers(0, 1, renderer->sampler_states[SAMPLER_LINEAR_CLAMP].GetAddressOf());
 
     // TextureId hdri = texture::load_hdr("assets/photo_studio_loft_hall_4k.hdr");
-    // TextureId hdri = texture::load_hdr("assets/metal_studio_23.hdr");
-    TextureId hdri = texture::load_hdr("assets/autoshop_01_4k.hdr");
+    TextureId hdri = texture::load_hdr("assets/metal_studio_23.hdr");
+    // TextureId hdri = texture::load_hdr("assets/autoshop_01_4k.hdr");
     Texture *hdri_tex = &renderer->textures[hdri.id];
 
     renderer->cubemap_id = texture::create(

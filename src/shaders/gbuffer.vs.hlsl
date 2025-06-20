@@ -79,7 +79,7 @@ VSOutput main(VSInput input) {
     output.texCoord = input.texCoord;
     output.worldPosition = worldPos.xyz;
     output.worldNormal = normalize(mul(input.normal, worldInvTranspose));
-    output.worldTangent = float4(transformedTangent, input.tangent.w);
+    output.worldTangent = float4(transformedTangent, -input.tangent.w);
 
     return output;
 }

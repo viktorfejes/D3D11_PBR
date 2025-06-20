@@ -68,8 +68,8 @@ bool application::initialize(ApplicationConfig config) {
         };
         uint32_t indices[] = {0, 1, 2, 0, 2, 3};
         MeshId plane_mesh = mesh::load_from_data(vertices, ARRAYSIZE(vertices), indices, ARRAYSIZE(indices));
-        MaterialId default_mat = material::create(DirectX::XMFLOAT3(0.18, 0.18, 0.18), id::invalid(), 0.0, id::invalid(), 0.8f, id::invalid(), id::invalid(), 0.0f, id::invalid());
-        scene::add_mesh(&pState->scenes[0], plane_mesh, default_mat, DirectX::XMFLOAT3(0.0f, -5.8f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f), DirectX::XMFLOAT3(100.0f, 100.0f, 100.0f));
+        MaterialId default_mat = material::create(DirectX::XMFLOAT3(0.0, 0.0, 0.0), id::invalid(), 0.0, id::invalid(), 0.8f, id::invalid(), 0.0f, id::invalid(), id::invalid(), 0.0f, id::invalid());
+        scene::add_mesh(&pState->scenes[0], plane_mesh, default_mat, DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f), DirectX::XMFLOAT3(0.0f, 0.0f, 0.0f), DirectX::XMFLOAT3(100.0f, 100.0f, 100.0f));
     }
 
     return true;
@@ -214,6 +214,7 @@ bool application::deserialize_config() {
         int id = cJSON_GetObjectItem(mat, "id")->valueint;
         cJSON *albedo_color = cJSON_GetObjectItem(mat, "albedo");
         float roughness = cJSON_GetObjectItem(mat, "roughness")->valuedouble;
+        float coat = cJSON_GetObjectItem(mat, "coat")->valuedouble;
         float metallic = cJSON_GetObjectItem(mat, "metallic")->valuedouble;
         float emission_intensity = cJSON_GetObjectItem(mat, "emission")->valuedouble;
 
@@ -226,6 +227,7 @@ bool application::deserialize_config() {
         int albedo_tex_value = cJSON_GetObjectItem(mat, "albedo_map")->valueint;
         int metallic_tex_value = cJSON_GetObjectItem(mat, "metallic_map")->valueint;
         int roughness_tex_value = cJSON_GetObjectItem(mat, "roughness_map")->valueint;
+        int coat_tex_value = cJSON_GetObjectItem(mat, "coat_map")->valueint;
         int normal_tex_value = cJSON_GetObjectItem(mat, "normal_map")->valueint;
         int emission_tex_value = cJSON_GetObjectItem(mat, "emission_map")->valueint;
 
@@ -233,6 +235,7 @@ bool application::deserialize_config() {
         Id albedo_tex = albedo_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, albedo_tex_value);
         Id metallic_tex = metallic_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, metallic_tex_value);
         Id roughness_tex = roughness_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, roughness_tex_value);
+        Id coat_tex = coat_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, coat_tex_value);
         Id normal_tex = normal_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, normal_tex_value);
         Id emission_tex = emission_tex_value < 0 ? id::invalid() : idmap::get(&tex_map, emission_tex_value);
 
@@ -243,6 +246,8 @@ bool application::deserialize_config() {
             metallic_tex,
             roughness,
             roughness_tex,
+            coat,
+            coat_tex,
             normal_tex,
             emission_intensity,
             emission_tex);
